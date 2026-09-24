@@ -11,30 +11,55 @@ function escapeHtml(str) {
     .replace(/'/g, '&#039;');
 }
 
+// Get the guaranteed active user from memory or storage
+async function getGuaranteedUser() {
+  if (currentUser && currentUser.id) {
+    currentUser.id = Number(currentUser.id);
+    return currentUser;
+  }
+  const uid = sessionStorage.getItem('mrstudy_session_uid');
+  if (!uid) return null;
+
+  const db = await openDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction('users', 'readonly');
+    const store = tx.objectStore('users');
+    const req = store.get(Number(uid));
+    req.onsuccess = () => {
+      if (req.result) {
+        req.result.id = Number(req.result.id);
+        currentUser = req.result;
+      }
+      resolve(currentUser);
+    };
+    req.onerror = () => resolve(null);
+  });
+}
+
 // Initialize and bind Setup / Management controls
-function initSetupView() {
-  if (!currentUser || !currentUser.id) return;
+async function initSetupView() {
+  const user = await getGuaranteedUser();
+  if (!user) return;
 
   const toggleTaskitator = document.getElementById('toggle-taskitator-link');
   const inputPenalty = document.getElementById('input-withdrawal-penalty');
   const btnSavePenalty = document.getElementById('btn-save-penalty');
 
-  // Load existing user preferences
   if (toggleTaskitator) {
-    toggleTaskitator.checked = !!currentUser.is_taskitator_linked;
+    toggleTaskitator.checked = !!user.is_taskitator_linked;
     toggleTaskitator.onchange = async (e) => {
-      currentUser.is_taskitator_linked = e.target.checked;
-      await updateUserRecord(currentUser);
+      user.is_taskitator_linked = e.target.checked;
+      await updateUserRecord(user);
       if (typeof triggerCloudSyncPush === 'function') triggerCloudSyncPush();
       showToast(
-        currentUser.is_taskitator_linked ? "Taskitator integration linked." : "Taskitator integration unlinked.",
+        user.is_taskitator_linked ? "Taskitator integration linked." : "Taskitator integration unlinked.",
         "info"
       );
     };
   }
 
   if (inputPenalty) {
-    inputPenalty.value = currentUser.withdrawal_penalty_pct ?? 10;
+    inputPenalty.value = user.withdrawal_penalty_pct ?? 10;
   }
 
   if (btnSavePenalty && inputPenalty) {
@@ -45,10 +70,10 @@ function initSetupView() {
         return;
       }
 
-      currentUser.withdrawal_penalty_pct = val;
-      await updateUserRecord(currentUser);
+      user.withdrawal_penalty_pct = val;
+      await updateUserRecord(user);
       if (typeof triggerCloudSyncPush === 'function') triggerCloudSyncPush();
-      showToast("Withdrawal penalty updated successfully.", "success");
+      showToast(`Penalty updated to ${val}%.`, "success");
     };
   }
 
@@ -61,8 +86,12 @@ async function updateUserRecord(user) {
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction('users', 'readwrite');
-    tx.objectStore('users').put(user);
-    tx.oncomplete = () => resolve();
+    const store = tx.objectStore('users');
+    store.put(user);
+    tx.oncomplete = () => {
+      currentUser = user;
+      resolve();
+    };
     tx.onerror = (e) => reject(e.target.error);
   });
 }
@@ -97,14 +126,19 @@ function getCleanModalElement(modalId) {
 
 // Rule Creation/Manager Modal
 async function openRuleManagerModal() {
-  if (!currentUser || !currentUser.id) return;
+  const user = await getGuaranteedUser();
+  if (!user) {
+    showToast("Please log in first.", "danger");
+    return;
+  }
+
   const modalEl = getCleanModalElement('modal-manage-rules');
-  const labels = await fetchUserRuleLabels(currentUser.id);
+  let labels = await fetchUserRuleLabels(user.id);
 
   if (!labels || labels.length === 0) {
-    await ensureDefaultRuleLabel(currentUser.id);
+    await ensureDefaultRuleLabel(user.id);
+    labels = await fetchUserRuleLabels(user.id);
   }
-  const refreshedLabels = await fetchUserRuleLabels(currentUser.id);
 
   modalEl.innerHTML = `
     <div class="modal-dialog modal-dialog-centered max-w-mobile">
@@ -116,12 +150,12 @@ async function openRuleManagerModal() {
         <div class="modal-body">
           <div class="mb-2">
             <label class="form-label small text-slate-light">Rule Name *</label>
-            <input type="text" id="rule-create-name" class="form-control form-control-sm bg-slate-dark text-white border-slate" required />
+            <input type="text" id="rule-create-name" class="form-control form-control-sm bg-slate-dark text-white border-slate" placeholder="e.g., Read Biology Chapter" required />
           </div>
           <div class="mb-2">
             <label class="form-label small text-slate-light">Label Group *</label>
             <select id="rule-create-label" class="form-select form-select-sm bg-slate-dark text-white border-slate">
-              ${refreshedLabels.map(l => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join('')}
+              ${labels.map(l => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join('')}
             </select>
           </div>
           <div class="mb-2">
@@ -164,15 +198,27 @@ async function openRuleManagerModal() {
 }
 
 async function saveNewRule(bsModal) {
-  if (!currentUser || !currentUser.id) return;
+  const user = await getGuaranteedUser();
+  if (!user) {
+    showToast("Session expired. Please log in again.", "danger");
+    return;
+  }
 
-  const name = document.getElementById('rule-create-name').value.trim();
-  const labelId = parseInt(document.getElementById('rule-create-label').value, 10);
-  const type = document.getElementById('rule-create-type').value;
-  const minPoints = parseInt(document.getElementById('rule-create-min').value, 10);
-  const maxPoints = parseInt(document.getElementById('rule-create-max').value, 10);
-  const jump = parseInt(document.getElementById('rule-create-jump').value, 10);
-  const desc = document.getElementById('rule-create-desc').value.trim();
+  const nameEl = document.getElementById('rule-create-name');
+  const labelEl = document.getElementById('rule-create-label');
+  const typeEl = document.getElementById('rule-create-type');
+  const minEl = document.getElementById('rule-create-min');
+  const maxEl = document.getElementById('rule-create-max');
+  const jumpEl = document.getElementById('rule-create-jump');
+  const descEl = document.getElementById('rule-create-desc');
+
+  const name = nameEl ? nameEl.value.trim() : '';
+  const labelId = labelEl ? parseInt(labelEl.value, 10) : NaN;
+  const type = typeEl ? typeEl.value : 'add';
+  const minPoints = minEl ? parseInt(minEl.value, 10) : NaN;
+  const maxPoints = maxEl ? parseInt(maxEl.value, 10) : NaN;
+  const jump = jumpEl ? parseInt(jumpEl.value, 10) : NaN;
+  const desc = descEl ? descEl.value.trim() : '';
 
   if (!name || isNaN(minPoints) || isNaN(maxPoints) || isNaN(jump) || isNaN(labelId)) {
     showToast("Please fill all required fields correctly.", "warning");
@@ -190,7 +236,7 @@ async function saveNewRule(bsModal) {
   const db = await openDB();
   const tx = db.transaction('rules', 'readwrite');
   tx.objectStore('rules').add({
-    user_id: Number(currentUser.id),
+    user_id: Number(user.id),
     label_id: Number(labelId),
     name,
     description: desc,
@@ -205,7 +251,7 @@ async function saveNewRule(bsModal) {
     if (bsModal) bsModal.hide();
     if (typeof renderActionsGrid === 'function') renderActionsGrid();
     if (typeof triggerCloudSyncPush === 'function') triggerCloudSyncPush();
-    showToast(`Rule "${name}" created!`, "success");
+    showToast(`Rule "${name}" created successfully!`, "success");
   };
   tx.onerror = (e) => {
     showToast(`Failed to save rule: ${e.target.error.message}`, "danger");
@@ -213,8 +259,13 @@ async function saveNewRule(bsModal) {
 }
 
 // Label Creation Modal
-function openLabelManagerModal() {
-  if (!currentUser || !currentUser.id) return;
+async function openLabelManagerModal() {
+  const user = await getGuaranteedUser();
+  if (!user) {
+    showToast("Please log in first.", "danger");
+    return;
+  }
+
   const modalEl = getCleanModalElement('modal-manage-labels');
 
   modalEl.innerHTML = `
@@ -244,9 +295,15 @@ function openLabelManagerModal() {
 }
 
 async function saveNewRuleLabel(bsModal) {
-  if (!currentUser || !currentUser.id) return;
+  const user = await getGuaranteedUser();
+  if (!user) {
+    showToast("Session expired.", "danger");
+    return;
+  }
 
-  const name = document.getElementById('label-create-name').value.trim();
+  const nameInput = document.getElementById('label-create-name');
+  const name = nameInput ? nameInput.value.trim() : '';
+
   if (!name) {
     showToast("Label name cannot be empty.", "warning");
     return;
@@ -255,7 +312,7 @@ async function saveNewRuleLabel(bsModal) {
   const db = await openDB();
   const tx = db.transaction('rule_labels', 'readwrite');
   tx.objectStore('rule_labels').add({
-    user_id: Number(currentUser.id),
+    user_id: Number(user.id),
     name,
     is_default: false,
     created_at: new Date().toISOString()
@@ -273,8 +330,13 @@ async function saveNewRuleLabel(bsModal) {
 }
 
 // Store Catalog Creator Modal
-function openStoreRewardManagerModal() {
-  if (!currentUser || !currentUser.id) return;
+async function openStoreRewardManagerModal() {
+  const user = await getGuaranteedUser();
+  if (!user) {
+    showToast("Please log in first.", "danger");
+    return;
+  }
+
   const modalEl = getCleanModalElement('modal-manage-store-item');
 
   modalEl.innerHTML = `
@@ -312,11 +374,19 @@ function openStoreRewardManagerModal() {
 }
 
 async function saveNewStoreItem(bsModal) {
-  if (!currentUser || !currentUser.id) return;
+  const user = await getGuaranteedUser();
+  if (!user) {
+    showToast("Session expired.", "danger");
+    return;
+  }
 
-  const name = document.getElementById('store-create-name').value.trim();
-  const desc = document.getElementById('store-create-desc').value.trim();
-  const price = parseInt(document.getElementById('store-create-price').value, 10);
+  const nameInput = document.getElementById('store-create-name');
+  const descInput = document.getElementById('store-create-desc');
+  const priceInput = document.getElementById('store-create-price');
+
+  const name = nameInput ? nameInput.value.trim() : '';
+  const desc = descInput ? descInput.value.trim() : '';
+  const price = priceInput ? parseInt(priceInput.value, 10) : NaN;
 
   if (!name || isNaN(price) || price < 0) {
     showToast("Please provide a name and non-negative price.", "warning");
@@ -326,7 +396,7 @@ async function saveNewStoreItem(bsModal) {
   const db = await openDB();
   const tx = db.transaction('store_items', 'readwrite');
   tx.objectStore('store_items').add({
-    user_id: Number(currentUser.id),
+    user_id: Number(user.id),
     name,
     description: desc,
     price,
