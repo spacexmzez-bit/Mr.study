@@ -1,12 +1,12 @@
 // js/auth.js
 
+const SYNC_WORKER_URL = 'https://taskitator-sync.spacexmzez.workers.dev';
 const MASTER_ADMIN_USERNAME = 'mazen ali';
-// Pre-computed SHA-256 hash for 'Mzon1974125$'
 const MASTER_ADMIN_HASH = '78dc65b53e70d4d8ef5ba8ddb16bcebbca7eeb78c89b275bfba5e902b4f9dfc2';
 
 let currentUser = null;
 
-// SHA-256 cryptographic hashing using Web Crypto API
+// SHA-256 cryptographic passkey derivation
 async function hashPassword(plainText) {
   const msgUint8 = new TextEncoder().encode(plainText);
   const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
@@ -14,58 +14,10 @@ async function hashPassword(plainText) {
   return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-// Self-healing seed: Inserts or updates the master admin account automatically
-async function initMasterAdminAndDefaults() {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(['users', 'rule_labels'], 'readwrite');
-    const userStore = tx.objectStore('users');
-    const usernameIndex = userStore.index('username');
-    const checkReq = usernameIndex.get(MASTER_ADMIN_USERNAME);
-
-    checkReq.onsuccess = () => {
-      let masterUser = checkReq.result;
-
-      if (!masterUser) {
-        const newUser = {
-          username: MASTER_ADMIN_USERNAME,
-          password_hash: MASTER_ADMIN_HASH,
-          role: 'admin',
-          streak_count: 0,
-          last_activity_date: null,
-          streak_done: false,
-          streak_freeze_active: false,
-          banch_balance: 0,
-          total_xp: 0,
-          withdrawal_penalty_pct: 10,
-          is_taskitator_linked: false,
-          lang_pref: 'en',
-          created_at: new Date().toISOString()
-        };
-        const addReq = userStore.add(newUser);
-        addReq.onsuccess = (e) => {
-          const newUserId = e.target.result;
-          const labelStore = tx.objectStore('rule_labels');
-          labelStore.add({
-            user_id: newUserId,
-            name: 'General',
-            is_default: true,
-            created_at: new Date().toISOString()
-          });
-        };
-      } else {
-        // Guarantee password hash is always synchronized with MASTER_ADMIN_HASH
-        if (masterUser.password_hash !== MASTER_ADMIN_HASH || masterUser.role !== 'admin') {
-          masterUser.password_hash = MASTER_ADMIN_HASH;
-          masterUser.role = 'admin';
-          userStore.put(masterUser);
-        }
-      }
-    };
-
-    tx.oncomplete = () => resolve();
-    tx.onerror = (e) => reject(e.target.error);
-  });
+// Derive a unified user storage key / bearer token
+async function deriveSyncKey(username, plainPassword) {
+  const rawCombo = `${username.trim().toLowerCase()}:${plainPassword.trim()}`;
+  return await hashPassword(rawCombo);
 }
 
 // Ensure default "General" label exists for user
@@ -95,43 +47,184 @@ async function ensureDefaultRuleLabel(userId) {
   });
 }
 
-// Login verification
-async function authenticateUser(username, plainPassword) {
+// Seed local Master Admin record
+async function initMasterAdminAndDefaults() {
   const db = await openDB();
-  const hashedPassword = await hashPassword(plainPassword.trim());
-
   return new Promise((resolve, reject) => {
-    const tx = db.transaction('users', 'readonly');
-    const store = tx.objectStore('users');
-    const index = store.index('username');
-    const req = index.get(username.trim().toLowerCase());
+    const tx = db.transaction(['users', 'rule_labels'], 'readwrite');
+    const userStore = tx.objectStore('users');
+    const usernameIndex = userStore.index('username');
+    const checkReq = usernameIndex.get(MASTER_ADMIN_USERNAME);
 
-    req.onsuccess = () => {
-      let user = req.result;
-      
-      // Fallback: check exact or case-insensitive match
-      if (!user) {
-        const allReq = store.getAll();
-        allReq.onsuccess = () => {
-          const matched = (allReq.result || []).find(
-            u => u.username.toLowerCase() === username.trim().toLowerCase()
-          );
-          if (matched && matched.password_hash === hashedPassword) {
-            resolve(matched);
-          } else {
-            resolve(null);
-          }
+    checkReq.onsuccess = () => {
+      let masterUser = checkReq.result;
+
+      if (!masterUser) {
+        const newUser = {
+          username: MASTER_ADMIN_USERNAME,
+          password_hash: MASTER_ADMIN_HASH,
+          role: 'admin',
+          streak_count: 0,
+          last_activity_date: null,
+          streak_done: false,
+          streak_freeze_active: false,
+          banch_balance: 0,
+          total_xp: 0,
+          withdrawal_penalty_pct: 10,
+          is_taskitator_linked: true,
+          lang_pref: 'en',
+          created_at: new Date().toISOString()
         };
-        return;
-      }
-
-      if (user && user.password_hash === hashedPassword) {
-        resolve(user);
+        const addReq = userStore.add(newUser);
+        addReq.onsuccess = (e) => {
+          const newUserId = e.target.result;
+          const labelStore = tx.objectStore('rule_labels');
+          labelStore.add({
+            user_id: newUserId,
+            name: 'General',
+            is_default: true,
+            created_at: new Date().toISOString()
+          });
+        };
       } else {
-        resolve(null);
+        if (masterUser.password_hash !== MASTER_ADMIN_HASH || masterUser.role !== 'admin') {
+          masterUser.password_hash = MASTER_ADMIN_HASH;
+          masterUser.role = 'admin';
+          userStore.put(masterUser);
+        }
       }
     };
-    req.onerror = (e) => reject(e.target.error);
+
+    tx.oncomplete = () => resolve();
+    tx.onerror = (e) => reject(e.target.error);
+  });
+}
+
+// Authenticate via local IndexedDB or fetch snapshot directly from Cloudflare Worker
+async function authenticateUser(username, plainPassword) {
+  const cleanUsername = username.trim();
+  const passwordHash = await hashPassword(plainPassword.trim());
+  const syncBearerKey = await deriveSyncKey(cleanUsername, plainPassword);
+
+  const db = await openDB();
+
+  // 1. Check local IndexedDB first
+  const localUser = await new Promise((resolve) => {
+    const tx = db.transaction('users', 'readonly');
+    const store = tx.objectStore('users');
+    const req = store.getAll();
+
+    req.onsuccess = () => {
+      const match = (req.result || []).find(
+        u => u.username.toLowerCase() === cleanUsername.toLowerCase() && u.password_hash === passwordHash
+      );
+      resolve(match || null);
+    };
+    req.onerror = () => resolve(null);
+  });
+
+  if (localUser) {
+    sessionStorage.setItem('mrstudy_sync_key', syncBearerKey);
+    return localUser;
+  }
+
+  // 2. Query Cloudflare Worker KV if local record was not found
+  try {
+    const resp = await fetch(`${SYNC_WORKER_URL}/sync`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${syncBearerKey}`,
+        'X-User-Name': cleanUsername
+      }
+    });
+
+    if (resp.ok) {
+      const cloudData = await resp.json();
+      if (cloudData && cloudData.user) {
+        // Save cloud user state to local IndexedDB
+        const savedUser = await saveCloudUserLocally(cloudData.user, passwordHash);
+        sessionStorage.setItem('mrstudy_sync_key', syncBearerKey);
+        
+        // Restore associated data if present in snapshot
+        if (cloudData.rules || cloudData.inventory) {
+          await restoreCloudStateToLocalDB(savedUser.id, cloudData);
+        }
+        return savedUser;
+      }
+    }
+  } catch (err) {
+    console.warn('Worker sync request failed during auth:', err);
+  }
+
+  // 3. Auto-provision new account if matching Taskitator credentials
+  return await autoProvisionAccount(cleanUsername, passwordHash, syncBearerKey);
+}
+
+// Provision account locally and register sync token
+async function autoProvisionAccount(username, passwordHash, syncBearerKey) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(['users', 'rule_labels'], 'readwrite');
+    const userStore = tx.objectStore('users');
+
+    const isMaster = (username.toLowerCase() === MASTER_ADMIN_USERNAME.toLowerCase() && passwordHash === MASTER_ADMIN_HASH);
+
+    const newUser = {
+      username: username,
+      password_hash: passwordHash,
+      role: isMaster ? 'admin' : 'user',
+      streak_count: 0,
+      last_activity_date: null,
+      streak_done: false,
+      streak_freeze_active: false,
+      banch_balance: 0,
+      total_xp: 0,
+      withdrawal_penalty_pct: 10,
+      is_taskitator_linked: true,
+      lang_pref: 'en',
+      created_at: new Date().toISOString()
+    };
+
+    const addReq = userStore.add(newUser);
+    addReq.onsuccess = (e) => {
+      const uid = e.target.result;
+      newUser.id = uid;
+
+      const labelStore = tx.objectStore('rule_labels');
+      labelStore.add({
+        user_id: uid,
+        name: 'General',
+        is_default: true,
+        created_at: new Date().toISOString()
+      });
+
+      sessionStorage.setItem('mrstudy_sync_key', syncBearerKey);
+    };
+
+    tx.oncomplete = () => resolve(newUser);
+    tx.onerror = (e) => reject(e.target.error);
+  });
+}
+
+async function saveCloudUserLocally(userObj, passwordHash) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('users', 'readwrite');
+    const store = tx.objectStore('users');
+
+    const record = {
+      ...userObj,
+      password_hash: passwordHash,
+      is_taskitator_linked: true
+    };
+    delete record.id; // Allow IndexedDB autoIncrement to assign local id
+
+    const req = store.add(record);
+    req.onsuccess = (e) => {
+      record.id = e.target.result;
+      resolve(record);
+    };
+    tx.onerror = (e) => reject(e.target.error);
   });
 }
 
@@ -180,6 +273,7 @@ async function restoreSession() {
 function logoutUser() {
   currentUser = null;
   sessionStorage.removeItem('mrstudy_session_uid');
+  sessionStorage.removeItem('mrstudy_sync_key');
   updateAuthUI();
   showToast("Logged out successfully.", "info");
 }
@@ -279,8 +373,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (typeof refreshDashboardUI === 'function') {
           await refreshDashboardUI();
         }
+        if (typeof triggerCloudSyncPush === 'function') {
+          triggerCloudSyncPush();
+        }
       } else {
-        showToast('Invalid credentials. Please verify or register via Taskitator.', 'danger');
+        showToast('Login failed. Please check your credentials.', 'danger');
       }
     });
   }
