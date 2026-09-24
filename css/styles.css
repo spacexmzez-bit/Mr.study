@@ -1,0 +1,126 @@
+/* css/styles.css */
+
+:root {
+  --bg-deep-navy: #020617;
+  --bg-slate: #0f172a;
+  --bg-slate-dark: #090d16;
+  --bg-slate-navy: #020617;
+  --border-slate: #1e293b;
+  --text-cyan: #06b6d4;
+  --accent-cyan-hover: #0891b2;
+  --text-slate-light: #94a3b8;
+  --text-slate-muted: #64748b;
+  --btn-radius: 8px;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  background-color: var(--bg-deep-navy) !important;
+  color: #f8fafc;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+}
+
+/* Force Cyan & Navy branding */
+.text-cyan,
+.navbar-brand,
+#dash-rank-title,
+#dash-banch-balance,
+#dash-xp-to-next {
+  color: var(--text-cyan) !important;
+}
+
+.text-slate-light {
+  color: var(--text-slate-light) !important;
+}
+
+.text-slate-muted {
+  color: var(--text-slate-muted) !important;
+}
+
+.bg-slate {
+  background-color: var(--bg-slate) !important;
+}
+
+.bg-slate-dark {
+  background-color: var(--bg-slate-dark) !important;
+}
+
+.border-slate {
+  border-color: var(--border-slate) !important;
+}
+
+/* Card Enhancements */
+.card {
+  border-radius: var(--btn-radius);
+  border: 1px solid var(--border-slate) !important;
+  background-color: var(--bg-slate) !important;
+}
+
+/* Bottom Nav - Strict Single-Row Mobile Fix */
+#bottom-nav {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 64px;
+  background-color: var(--bg-slate-navy) !important;
+  border-top: 1px solid var(--border-slate) !important;
+  z-index: 1050;
+  padding: 0 4px;
+}
+
+#bottom-nav .container-fluid {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  justify-content: space-around !important;
+  align-items: center !important;
+  height: 100%;
+  max-width: 540px;
+  margin: 0 auto;
+  padding: 0;
+}
+
+.nav-btn {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+  color: var(--text-slate-muted) !important;
+  font-size: 0.7rem !important;
+  font-weight: 500;
+  padding: 6px 2px !important;
+  cursor: pointer;
+  flex: 1 1 0 !important;
+  min-width: 0;
+  text-decoration: none;
+}
+
+.nav-btn i {
+  font-size: 1.25rem !important;
+  line-height: 1;
+  margin-bottom: 3px;
+}
+
+.nav-btn span {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.nav-btn.active,
+.nav-btn:hover {
+  color: var(--text-cyan) !important;
+}
