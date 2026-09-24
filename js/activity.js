@@ -2,8 +2,9 @@
 
 // Execute point addition or deduction and commit to rolling 15-entry log
 async function applyPointTransaction(rule, pointValue, actionLabel = '') {
-  if (!currentUser) return;
+  if (!currentUser || !currentUser.id) return;
 
+  const numericUserId = Number(currentUser.id);
   const db = await openDB();
   const tx = db.transaction(['users', 'activity_logs'], 'readwrite');
   const userStore = tx.objectStore('users');
@@ -13,26 +14,27 @@ async function applyPointTransaction(rule, pointValue, actionLabel = '') {
   let banchDelta = 0;
 
   if (rule.type === 'add') {
-    // Multiplier calculation from active streak
-    const multiplier = getActiveStreakMultiplier(currentUser.streak_count);
+    const multiplier = (typeof getActiveStreakMultiplier === 'function')
+      ? getActiveStreakMultiplier(currentUser.streak_count)
+      : 1;
     const finalPoints = Math.round(pointValue * multiplier);
 
     xpDelta = finalPoints;
     banchDelta = finalPoints;
 
-    currentUser.total_xp += xpDelta;
-    currentUser.banch_balance += banchDelta;
+    currentUser.total_xp = (currentUser.total_xp || 0) + xpDelta;
+    currentUser.banch_balance = (currentUser.banch_balance || 0) + banchDelta;
 
-    // Trigger daily streak progression
-    applyDailyStreakOnPointAddition(currentUser);
+    if (typeof applyDailyStreakOnPointAddition === 'function') {
+      applyDailyStreakOnPointAddition(currentUser);
+    }
   } else {
-    // Deduct rule
     xpDelta = -pointValue;
-    currentUser.total_xp = Math.max(0, currentUser.total_xp + xpDelta);
+    currentUser.total_xp = Math.max(0, (currentUser.total_xp || 0) + xpDelta);
 
     // Debt Guardrail: Clamp spendable Banch balance strictly to 0
-    if (currentUser.banch_balance < pointValue) {
-      banchDelta = -currentUser.banch_balance;
+    if ((currentUser.banch_balance || 0) < pointValue) {
+      banchDelta = -(currentUser.banch_balance || 0);
       currentUser.banch_balance = 0;
     } else {
       banchDelta = -pointValue;
@@ -45,8 +47,8 @@ async function applyPointTransaction(rule, pointValue, actionLabel = '') {
 
   // Append to activity log
   const newLogEntry = {
-    user_id: currentUser.id,
-    rule_id: rule.id,
+    user_id: numericUserId,
+    rule_id: Number(rule.id) || 0,
     rule_name: rule.name,
     rule_type: rule.type,
     delta: xpDelta,
@@ -57,12 +59,14 @@ async function applyPointTransaction(rule, pointValue, actionLabel = '') {
   logStore.add(newLogEntry);
 
   tx.oncomplete = async () => {
-    // Prune logs exceeding rolling 15 records
-    await pruneRollingLogs('activity_logs', currentUser.id, 15);
-
-    // Refresh UI dashboards
+    await pruneRollingLogs('activity_logs', numericUserId, 15);
     await refreshDashboardUI();
     renderActivityFeed();
+
+    if (typeof triggerCloudSyncPush === 'function') {
+      triggerCloudSyncPush();
+    }
+
     showToast(
       `${rule.type === 'add' ? '+' : ''}${banchDelta} Banch (${rule.name})`,
       rule.type === 'add' ? 'success' : 'danger'
@@ -76,24 +80,24 @@ async function applyPointTransaction(rule, pointValue, actionLabel = '') {
 
 // Render rolling 15 Recent Activity entries on Dashboard
 async function renderActivityFeed() {
-  if (!currentUser) return;
+  if (!currentUser || !currentUser.id) return;
   const container = document.getElementById('activity-feed-list');
   if (!container) return;
 
+  const numericUserId = Number(currentUser.id);
   const db = await openDB();
   const tx = db.transaction('activity_logs', 'readonly');
   const store = tx.objectStore('activity_logs');
   const index = store.index('user_id');
-  const req = index.getAll(currentUser.id);
+  const req = index.getAll(numericUserId);
 
   req.onsuccess = () => {
     let logs = req.result || [];
     if (logs.length === 0) {
-      container.innerHTML = `<p class="text-slate-muted small text-center my-3 mb-0">${t('no_activity')}</p>`;
+      container.innerHTML = `<p class="text-slate-muted small text-center my-3 mb-0">No recent activity recorded.</p>`;
       return;
     }
 
-    // Sort descending by ID / Timestamp
     logs.sort((a, b) => b.id - a.id);
 
     container.innerHTML = logs.map(log => {
@@ -114,7 +118,7 @@ async function renderActivityFeed() {
           <div class="d-flex align-items-center gap-2">
             <span class="${colorClass} fw-bold small text-nowrap">${sign}${log.banch_delta} B</span>
             <button class="btn btn-outline-slate btn-sm py-0 px-2 text-slate-light" 
-              onclick="undoActivityAction(${log.id})" title="${t('undo')}">
+              onclick="undoActivityAction(${Number(log.id)})" title="Undo">
               <i class="bi bi-arrow-counterclockwise"></i>
             </button>
           </div>
@@ -126,32 +130,32 @@ async function renderActivityFeed() {
 
 // Atomic Undo Engine: Reverses exact XP/Banch deltas and purges log entry
 async function undoActivityAction(logId) {
-  if (!currentUser) return;
+  if (!currentUser || !currentUser.id) return;
 
+  const numericLogId = Number(logId);
   const db = await openDB();
   const tx = db.transaction(['users', 'activity_logs'], 'readwrite');
   const logStore = tx.objectStore('activity_logs');
   const userStore = tx.objectStore('users');
 
-  const req = logStore.get(logId);
+  const req = logStore.get(numericLogId);
   req.onsuccess = () => {
     const log = req.result;
     if (!log) return;
 
-    // Reverse total XP and Banch deltas
-    currentUser.total_xp = Math.max(0, currentUser.total_xp - log.delta);
-    currentUser.banch_balance = Math.max(0, currentUser.banch_balance - log.banch_delta);
+    currentUser.total_xp = Math.max(0, (currentUser.total_xp || 0) - log.delta);
+    currentUser.banch_balance = Math.max(0, (currentUser.banch_balance || 0) - log.banch_delta);
 
-    // Save restored user state
     userStore.put(currentUser);
-
-    // Permanently remove undone entry from rolling activity store
-    logStore.delete(logId);
+    logStore.delete(numericLogId);
   };
 
   tx.oncomplete = async () => {
     await refreshDashboardUI();
     renderActivityFeed();
+    if (typeof triggerCloudSyncPush === 'function') {
+      triggerCloudSyncPush();
+    }
     showToast("Action undone. Balances restored.", "info");
   };
 
@@ -172,16 +176,25 @@ async function refreshDashboardUI() {
   const banchBalanceEl = document.getElementById('dash-banch-balance');
   const storeBanchBalanceEl = document.getElementById('store-banch-balance');
 
-  if (totalXpEl) totalXpEl.textContent = currentUser.total_xp.toLocaleString();
-  if (banchBalanceEl) banchBalanceEl.textContent = currentUser.banch_balance.toLocaleString();
-  if (storeBanchBalanceEl) storeBanchBalanceEl.textContent = currentUser.banch_balance.toLocaleString();
-  if (streakCountEl) streakCountEl.innerHTML = `${currentUser.streak_count} <i class="bi bi-fire"></i>`;
+  if (totalXpEl) totalXpEl.textContent = (currentUser.total_xp || 0).toLocaleString();
+  if (banchBalanceEl) banchBalanceEl.textContent = (currentUser.banch_balance || 0).toLocaleString();
+  if (storeBanchBalanceEl) storeBanchBalanceEl.textContent = (currentUser.banch_balance || 0).toLocaleString();
+  if (streakCountEl) streakCountEl.innerHTML = `${currentUser.streak_count || 0} <i class="bi bi-fire"></i>`;
 
-  // Compute rank progression
   if (typeof calculateRankProgress === 'function') {
-    const rankInfo = calculateRankProgress(currentUser.total_xp);
+    const rankInfo = calculateRankProgress(currentUser.total_xp || 0);
     if (rankTitleEl) rankTitleEl.textContent = rankInfo.currentRank.title;
     if (xpToNextEl) xpToNextEl.textContent = rankInfo.pointsNeeded.toLocaleString();
     if (rankProgressEl) rankProgressEl.style.width = `${rankInfo.percent}%`;
   }
+
+  if (typeof renderDashboardLiveChallenges === 'function') {
+    renderDashboardLiveChallenges();
+  }
 }
+
+// Global window exposure
+window.applyPointTransaction = applyPointTransaction;
+window.renderActivityFeed = renderActivityFeed;
+window.undoActivityAction = undoActivityAction;
+window.refreshDashboardUI = refreshDashboardUI;
