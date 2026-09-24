@@ -1,0 +1,240 @@
+/* css/styles.css */
+
+:root {
+  --bg-deep-navy: #020617;
+  --bg-slate: #0f172a;
+  --bg-slate-dark: #090d16;
+  --bg-slate-navy: #020617;
+  --border-slate: #1e293b;
+  --text-cyan: #06b6d4;
+  --accent-cyan-hover: #0891b2;
+  --text-slate-light: #94a3b8;
+  --text-slate-muted: #64748b;
+  --btn-radius: 8px;
+}
+
+/* Global Reset & Base Typography */
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  background-color: var(--bg-deep-navy);
+  color: #f8fafc;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+  user-select: none;
+}
+
+/* Typography and Color Utility Overrides */
+.text-cyan {
+  color: var(--text-cyan) !important;
+}
+
+.text-slate-light {
+  color: var(--text-slate-light) !important;
+}
+
+.text-slate-muted {
+  color: var(--text-slate-muted) !important;
+}
+
+.bg-slate {
+  background-color: var(--bg-slate) !important;
+}
+
+.bg-slate-dark {
+  background-color: var(--bg-slate-dark) !important;
+}
+
+.bg-slate-navy {
+  background-color: var(--bg-slate-navy) !important;
+}
+
+.border-slate {
+  border-color: var(--border-slate) !important;
+}
+
+.border-cyan {
+  border-color: var(--text-cyan) !important;
+}
+
+.letter-spacing-1 {
+  letter-spacing: 0.05em;
+}
+
+/* Container Constraint for Mobile Ergonomics */
+.max-w-mobile {
+  max-width: 540px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* Card Styling */
+.card {
+  border-radius: var(--btn-radius);
+  border: 1px solid var(--border-slate);
+  background-color: var(--bg-slate);
+}
+
+/* Buttons */
+.btn {
+  border-radius: var(--btn-radius);
+  font-weight: 500;
+  transition: all 0.15s ease-in-out;
+}
+
+.btn-cyan {
+  background-color: var(--text-cyan);
+  color: var(--bg-deep-navy);
+  border: 1px solid var(--text-cyan);
+}
+
+.btn-cyan:hover,
+.btn-cyan:active {
+  background-color: var(--accent-cyan-hover);
+  border-color: var(--accent-cyan-hover);
+  color: #ffffff;
+}
+
+.btn-outline-cyan {
+  color: var(--text-cyan);
+  border-color: var(--text-cyan);
+  background-color: transparent;
+}
+
+.btn-outline-cyan:hover,
+.btn-outline-cyan.active,
+.btn-outline-cyan:active {
+  background-color: var(--text-cyan);
+  border-color: var(--text-cyan);
+  color: var(--bg-deep-navy);
+}
+
+.btn-outline-slate {
+  color: var(--text-slate-light);
+  border-color: var(--border-slate);
+  background-color: var(--bg-slate-dark);
+}
+
+.btn-outline-slate:hover,
+.btn-outline-slate:active {
+  background-color: var(--border-slate);
+  color: #ffffff;
+}
+
+/* Inputs & Form Controls */
+.form-control,
+.form-select {
+  border-radius: var(--btn-radius);
+  border: 1px solid var(--border-slate);
+  background-color: var(--bg-slate-dark);
+  color: #ffffff;
+}
+
+.form-control:focus,
+.form-select:focus {
+  background-color: var(--bg-slate-dark);
+  border-color: var(--text-cyan);
+  color: #ffffff;
+  box-shadow: 0 0 0 0.25rem rgba(6, 182, 212, 0.25);
+}
+
+/* Sticky Bottom Navigation Bar */
+#bottom-nav {
+  height: 64px;
+  z-index: 1030;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.nav-btn {
+  background: transparent;
+  border: none;
+  outline: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-slate-muted);
+  font-size: 0.72rem;
+  font-weight: 500;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: color 0.15s ease-in-out;
+  flex: 1;
+}
+
+.nav-btn i {
+  font-size: 1.25rem;
+  margin-bottom: 2px;
+}
+
+.nav-btn.active,
+.nav-btn:hover {
+  color: var(--text-cyan);
+}
+
+/* Action Point Buttons Grid */
+.action-grid-btn {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  min-height: 85px;
+  padding: 10px;
+  text-align: center;
+  border-radius: var(--btn-radius);
+  border: 1px solid var(--border-slate);
+  background-color: var(--bg-slate);
+  cursor: pointer;
+  transition: transform 0.1s ease, border-color 0.15s ease;
+}
+
+.action-grid-btn:active {
+  transform: scale(0.97);
+}
+
+.action-grid-btn.btn-add {
+  border-left: 4px solid #10b981;
+}
+
+.action-grid-btn.btn-deduct {
+  border-left: 4px solid #ef4444;
+}
+
+/* Form Switcher Accent */
+.form-check-input:checked {
+  background-color: var(--text-cyan);
+  border-color: var(--text-cyan);
+}
+
+/* Arabic / RTL Isolation: Text Direction Only (No UI Flipping) */
+/* The layout order and button sides remain identical regardless of language */
+body[dir="rtl"] {
+  direction: ltr !important; /* Preserves exact layout structure */
+}
+
+body[data-lang="ar"] .card,
+body[data-lang="ar"] .form-label,
+body[data-lang="ar"] p,
+body[data-lang="ar"] h2,
+body[data-lang="ar"] h4,
+body[data-lang="ar"] h6,
+body[data-lang="ar"] span:not(.navbar-brand) {
+  text-align: right;
+  direction: rtl;
+}
+
+body[data-lang="ar"] .navbar-brand {
+  text-align: left;
+  direction: ltr;
+}
+
+body[data-lang="ar"] .nav-btn span {
+  text-align: center;
+  direction: rtl;
+}
