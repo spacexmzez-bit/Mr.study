@@ -1,9 +1,8 @@
-// auth.js
+// js/auth.js
 
 const MASTER_ADMIN_USERNAME = 'mazen ali';
-// Pre-computed SHA-256 hash of your password
+// Pre-computed SHA-256 hash for 'Mzon1974125$'
 const MASTER_ADMIN_HASH = '78dc65b53e70d4d8ef5ba8ddb16bcebbca7eeb78c89b275bfba5e902b4f9dfc2';
-
 
 let currentUser = null;
 
@@ -15,7 +14,7 @@ async function hashPassword(plainText) {
   return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-// Seed the Master Admin account and default "General" rule label
+// Self-healing seed: Inserts or updates the master admin account automatically
 async function initMasterAdminAndDefaults() {
   const db = await openDB();
   return new Promise((resolve, reject) => {
@@ -24,14 +23,13 @@ async function initMasterAdminAndDefaults() {
     const usernameIndex = userStore.index('username');
     const checkReq = usernameIndex.get(MASTER_ADMIN_USERNAME);
 
-    checkReq.onsuccess = async () => {
+    checkReq.onsuccess = () => {
       let masterUser = checkReq.result;
-      const expectedHash = MASTER_ADMIN_HASH;
 
       if (!masterUser) {
         const newUser = {
           username: MASTER_ADMIN_USERNAME,
-          password_hash: expectedHash,
+          password_hash: MASTER_ADMIN_HASH,
           role: 'admin',
           streak_count: 0,
           last_activity_date: null,
@@ -56,9 +54,10 @@ async function initMasterAdminAndDefaults() {
           });
         };
       } else {
-        if (masterUser.role !== 'admin' || masterUser.password_hash !== expectedHash) {
+        // Guarantee password hash is always synchronized with MASTER_ADMIN_HASH
+        if (masterUser.password_hash !== MASTER_ADMIN_HASH || masterUser.role !== 'admin') {
+          masterUser.password_hash = MASTER_ADMIN_HASH;
           masterUser.role = 'admin';
-          masterUser.password_hash = expectedHash;
           userStore.put(masterUser);
         }
       }
@@ -69,7 +68,7 @@ async function initMasterAdminAndDefaults() {
   });
 }
 
-// Ensure default "General" label exists for any user
+// Ensure default "General" label exists for user
 async function ensureDefaultRuleLabel(userId) {
   const db = await openDB();
   return new Promise((resolve, reject) => {
@@ -79,7 +78,7 @@ async function ensureDefaultRuleLabel(userId) {
     const req = index.getAll(userId);
 
     req.onsuccess = () => {
-      const labels = req.result;
+      const labels = req.result || [];
       const hasGeneral = labels.some(l => l.name.toLowerCase() === 'general');
       if (!hasGeneral) {
         store.add({
@@ -99,16 +98,33 @@ async function ensureDefaultRuleLabel(userId) {
 // Login verification
 async function authenticateUser(username, plainPassword) {
   const db = await openDB();
-  const hashedPassword = await hashPassword(plainPassword);
+  const hashedPassword = await hashPassword(plainPassword.trim());
 
   return new Promise((resolve, reject) => {
     const tx = db.transaction('users', 'readonly');
     const store = tx.objectStore('users');
     const index = store.index('username');
-    const req = index.get(username.trim());
+    const req = index.get(username.trim().toLowerCase());
 
     req.onsuccess = () => {
-      const user = req.result;
+      let user = req.result;
+      
+      // Fallback: check exact or case-insensitive match
+      if (!user) {
+        const allReq = store.getAll();
+        allReq.onsuccess = () => {
+          const matched = (allReq.result || []).find(
+            u => u.username.toLowerCase() === username.trim().toLowerCase()
+          );
+          if (matched && matched.password_hash === hashedPassword) {
+            resolve(matched);
+          } else {
+            resolve(null);
+          }
+        };
+        return;
+      }
+
       if (user && user.password_hash === hashedPassword) {
         resolve(user);
       } else {
@@ -119,7 +135,6 @@ async function authenticateUser(username, plainPassword) {
   });
 }
 
-// Session state initialization
 function setSessionUser(user) {
   currentUser = user;
   sessionStorage.setItem('mrstudy_session_uid', user.id);
@@ -176,14 +191,12 @@ function updateAuthUI() {
   const btnAdminNav = document.getElementById('btn-admin-nav');
 
   if (!currentUser) {
-    // Show auth gate, hide main panels and navigation
     document.querySelectorAll('.view-panel').forEach(el => el.classList.add('d-none'));
     if (viewAuth) viewAuth.classList.remove('d-none');
     if (bottomNav) bottomNav.classList.add('d-none');
     if (headerBadge) headerBadge.classList.add('d-none');
     if (btnAdminNav) btnAdminNav.classList.add('d-none');
   } else {
-    // Hide auth gate, restore bottom navigation
     if (viewAuth) viewAuth.classList.add('d-none');
     if (bottomNav) bottomNav.classList.remove('d-none');
     if (headerBadge) {
@@ -197,12 +210,10 @@ function updateAuthUI() {
         btnAdminNav.classList.add('d-none');
       }
     }
-    // Switch to Dashboard view
     switchView('view-dashboard');
   }
 }
 
-// Toast utility wrapper
 function showToast(message, type = 'info') {
   const toastEl = document.getElementById('app-toast');
   const toastBody = document.getElementById('toast-body');
@@ -225,7 +236,6 @@ function showToast(message, type = 'info') {
   toast.show();
 }
 
-// Global View Switcher
 function switchView(targetViewId) {
   document.querySelectorAll('.view-panel').forEach(panel => {
     panel.classList.add('d-none');
@@ -247,7 +257,7 @@ function switchView(targetViewId) {
   window.scrollTo({ top: 0, behavior: 'instant' });
 }
 
-// Event Listeners for Authentication
+// App Bootstrap
 document.addEventListener('DOMContentLoaded', async () => {
   await openDB();
   await initMasterAdminAndDefaults();
@@ -265,7 +275,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         await ensureDefaultRuleLabel(user.id);
         setSessionUser(user);
         formLogin.reset();
-        showToast(`Welcome back, ${user.username}!`, 'success');
+        showToast(`Welcome, ${user.username}!`, 'success');
         if (typeof refreshDashboardUI === 'function') {
           await refreshDashboardUI();
         }
@@ -282,7 +292,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // Bottom Navigation Handling
   document.querySelectorAll('.nav-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const target = btn.getAttribute('data-target');
