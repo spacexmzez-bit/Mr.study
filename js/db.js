@@ -1,4 +1,4 @@
-// js/db.js
+//  js/db.js
 const DB_NAME = 'MrStudyDB';
 const DB_VERSION = 1;
 
