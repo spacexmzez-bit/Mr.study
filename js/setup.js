@@ -1,8 +1,19 @@
 // js/setup.js
 
+// Safe string escaper for XSS prevention and template rendering
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 // Initialize and bind Setup / Management controls
 function initSetupView() {
-  if (!currentUser) return;
+  if (!currentUser || !currentUser.id) return;
 
   const toggleTaskitator = document.getElementById('toggle-taskitator-link');
   const inputPenalty = document.getElementById('input-withdrawal-penalty');
@@ -11,22 +22,23 @@ function initSetupView() {
   // Load existing user preferences
   if (toggleTaskitator) {
     toggleTaskitator.checked = !!currentUser.is_taskitator_linked;
-    toggleTaskitator.addEventListener('change', async (e) => {
+    toggleTaskitator.onchange = async (e) => {
       currentUser.is_taskitator_linked = e.target.checked;
       await updateUserRecord(currentUser);
+      if (typeof triggerCloudSyncPush === 'function') triggerCloudSyncPush();
       showToast(
         currentUser.is_taskitator_linked ? "Taskitator integration linked." : "Taskitator integration unlinked.",
         "info"
       );
-    });
+    };
   }
 
   if (inputPenalty) {
-    inputPenalty.value = currentUser.withdrawal_penalty_pct || 10;
+    inputPenalty.value = currentUser.withdrawal_penalty_pct ?? 10;
   }
 
   if (btnSavePenalty && inputPenalty) {
-    btnSavePenalty.addEventListener('click', async () => {
+    btnSavePenalty.onclick = async () => {
       const val = parseInt(inputPenalty.value, 10);
       if (isNaN(val) || val < 0 || val > 100) {
         showToast("Penalty must be a percentage between 0 and 100.", "warning");
@@ -35,8 +47,9 @@ function initSetupView() {
 
       currentUser.withdrawal_penalty_pct = val;
       await updateUserRecord(currentUser);
+      if (typeof triggerCloudSyncPush === 'function') triggerCloudSyncPush();
       showToast("Withdrawal penalty updated successfully.", "success");
-    });
+    };
   }
 
   bindManagerModalButtons();
@@ -44,6 +57,7 @@ function initSetupView() {
 
 // Persist user record updates to IndexedDB
 async function updateUserRecord(user) {
+  if (!user || !user.id) return;
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction('users', 'readwrite');
@@ -53,35 +67,44 @@ async function updateUserRecord(user) {
   });
 }
 
-// Bind modal open buttons for Rules, Labels, and Store managers
+// Bind modal trigger buttons safely
 function bindManagerModalButtons() {
   const btnRules = document.getElementById('btn-open-rule-manager');
   const btnLabels = document.getElementById('btn-open-label-manager');
   const btnStore = document.getElementById('btn-open-store-manager');
 
-  if (btnRules) {
-    btnRules.addEventListener('click', () => openRuleManagerModal());
+  if (btnRules) btnRules.onclick = () => openRuleManagerModal();
+  if (btnLabels) btnLabels.onclick = () => openLabelManagerModal();
+  if (btnStore) btnStore.onclick = () => openStoreRewardManagerModal();
+}
+
+// Helper: Ensure clean singleton modal container
+function getCleanModalElement(modalId) {
+  let modalEl = document.getElementById(modalId);
+  if (modalEl) {
+    const existingInstance = bootstrap.Modal.getInstance(modalEl);
+    if (existingInstance) existingInstance.dispose();
+    modalEl.remove();
   }
-  if (btnLabels) {
-    btnLabels.addEventListener('click', () => openLabelManagerModal());
-  }
-  if (btnStore) {
-    btnStore.addEventListener('click', () => openStoreRewardManagerModal());
-  }
+  modalEl = document.createElement('div');
+  modalEl.id = modalId;
+  modalEl.className = 'modal fade';
+  modalEl.tabIndex = -1;
+  modalEl.setAttribute('aria-hidden', 'true');
+  document.body.appendChild(modalEl);
+  return modalEl;
 }
 
 // Rule Creation/Manager Modal
 async function openRuleManagerModal() {
-  let modalEl = document.getElementById('modal-manage-rules');
-  if (!modalEl) {
-    modalEl = document.createElement('div');
-    modalEl.id = 'modal-manage-rules';
-    modalEl.className = 'modal fade';
-    modalEl.tabIndex = -1;
-    document.body.appendChild(modalEl);
-  }
-
+  if (!currentUser || !currentUser.id) return;
+  const modalEl = getCleanModalElement('modal-manage-rules');
   const labels = await fetchUserRuleLabels(currentUser.id);
+
+  if (!labels || labels.length === 0) {
+    await ensureDefaultRuleLabel(currentUser.id);
+  }
+  const refreshedLabels = await fetchUserRuleLabels(currentUser.id);
 
   modalEl.innerHTML = `
     <div class="modal-dialog modal-dialog-centered max-w-mobile">
@@ -98,7 +121,7 @@ async function openRuleManagerModal() {
           <div class="mb-2">
             <label class="form-label small text-slate-light">Label Group *</label>
             <select id="rule-create-label" class="form-select form-select-sm bg-slate-dark text-white border-slate">
-              ${labels.map(l => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join('')}
+              ${refreshedLabels.map(l => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join('')}
             </select>
           </div>
           <div class="mb-2">
@@ -129,17 +152,20 @@ async function openRuleManagerModal() {
         </div>
         <div class="modal-footer border-slate">
           <button type="button" class="btn btn-outline-slate btn-sm" data-bs-dismiss="modal">Cancel</button>
-          <button type="button" class="btn btn-cyan btn-sm fw-bold px-4" onclick="saveNewRule()">Save Rule</button>
+          <button type="button" id="btn-submit-save-rule" class="btn btn-cyan btn-sm fw-bold px-4">Save Rule</button>
         </div>
       </div>
     </div>
   `;
 
   const bsModal = new bootstrap.Modal(modalEl);
+  document.getElementById('btn-submit-save-rule').onclick = () => saveNewRule(bsModal);
   bsModal.show();
 }
 
-async function saveNewRule() {
+async function saveNewRule(bsModal) {
+  if (!currentUser || !currentUser.id) return;
+
   const name = document.getElementById('rule-create-name').value.trim();
   const labelId = parseInt(document.getElementById('rule-create-label').value, 10);
   const type = document.getElementById('rule-create-type').value;
@@ -148,25 +174,24 @@ async function saveNewRule() {
   const jump = parseInt(document.getElementById('rule-create-jump').value, 10);
   const desc = document.getElementById('rule-create-desc').value.trim();
 
-  // Mathematical constraints verification
-  if (!name || isNaN(minPoints) || isNaN(maxPoints) || isNaN(jump)) {
-    showToast("Please fill all required numeric fields.", "warning");
+  if (!name || isNaN(minPoints) || isNaN(maxPoints) || isNaN(jump) || isNaN(labelId)) {
+    showToast("Please fill all required fields correctly.", "warning");
     return;
   }
   if (minPoints > maxPoints) {
     showToast("Min points cannot exceed Max points.", "danger");
     return;
   }
-  if (jump < 1 || jump > (maxPoints - minPoints + 1)) {
-    showToast(`Jump interval must be between 1 and ${maxPoints - minPoints + 1}.`, "danger");
+  if (jump < 1) {
+    showToast("Jump interval must be at least 1.", "danger");
     return;
   }
 
   const db = await openDB();
   const tx = db.transaction('rules', 'readwrite');
   tx.objectStore('rules').add({
-    user_id: currentUser.id,
-    label_id: labelId,
+    user_id: Number(currentUser.id),
+    label_id: Number(labelId),
     name,
     description: desc,
     min_points: minPoints,
@@ -177,25 +202,20 @@ async function saveNewRule() {
   });
 
   tx.oncomplete = () => {
-    const modalEl = document.getElementById('modal-manage-rules');
-    const bsModal = bootstrap.Modal.getInstance(modalEl);
     if (bsModal) bsModal.hide();
-
     if (typeof renderActionsGrid === 'function') renderActionsGrid();
+    if (typeof triggerCloudSyncPush === 'function') triggerCloudSyncPush();
     showToast(`Rule "${name}" created!`, "success");
+  };
+  tx.onerror = (e) => {
+    showToast(`Failed to save rule: ${e.target.error.message}`, "danger");
   };
 }
 
 // Label Creation Modal
 function openLabelManagerModal() {
-  let modalEl = document.getElementById('modal-manage-labels');
-  if (!modalEl) {
-    modalEl = document.createElement('div');
-    modalEl.id = 'modal-manage-labels';
-    modalEl.className = 'modal fade';
-    modalEl.tabIndex = -1;
-    document.body.appendChild(modalEl);
-  }
+  if (!currentUser || !currentUser.id) return;
+  const modalEl = getCleanModalElement('modal-manage-labels');
 
   modalEl.innerHTML = `
     <div class="modal-dialog modal-dialog-centered max-w-mobile">
@@ -212,49 +232,50 @@ function openLabelManagerModal() {
         </div>
         <div class="modal-footer border-slate">
           <button type="button" class="btn btn-outline-slate btn-sm" data-bs-dismiss="modal">Cancel</button>
-          <button type="button" class="btn btn-cyan btn-sm fw-bold px-4" onclick="saveNewRuleLabel()">Create Label</button>
+          <button type="button" id="btn-submit-save-label" class="btn btn-cyan btn-sm fw-bold px-4">Create Label</button>
         </div>
       </div>
     </div>
   `;
 
   const bsModal = new bootstrap.Modal(modalEl);
+  document.getElementById('btn-submit-save-label').onclick = () => saveNewRuleLabel(bsModal);
   bsModal.show();
 }
 
-async function saveNewRuleLabel() {
+async function saveNewRuleLabel(bsModal) {
+  if (!currentUser || !currentUser.id) return;
+
   const name = document.getElementById('label-create-name').value.trim();
-  if (!name) return;
+  if (!name) {
+    showToast("Label name cannot be empty.", "warning");
+    return;
+  }
 
   const db = await openDB();
   const tx = db.transaction('rule_labels', 'readwrite');
   tx.objectStore('rule_labels').add({
-    user_id: currentUser.id,
+    user_id: Number(currentUser.id),
     name,
     is_default: false,
     created_at: new Date().toISOString()
   });
 
   tx.oncomplete = () => {
-    const modalEl = document.getElementById('modal-manage-labels');
-    const bsModal = bootstrap.Modal.getInstance(modalEl);
     if (bsModal) bsModal.hide();
-
     if (typeof renderRuleLabelFilters === 'function') renderRuleLabelFilters();
+    if (typeof triggerCloudSyncPush === 'function') triggerCloudSyncPush();
     showToast(`Label "${name}" created!`, "success");
+  };
+  tx.onerror = (e) => {
+    showToast(`Failed to save label: ${e.target.error.message}`, "danger");
   };
 }
 
 // Store Catalog Creator Modal
 function openStoreRewardManagerModal() {
-  let modalEl = document.getElementById('modal-manage-store-item');
-  if (!modalEl) {
-    modalEl = document.createElement('div');
-    modalEl.id = 'modal-manage-store-item';
-    modalEl.className = 'modal fade';
-    modalEl.tabIndex = -1;
-    document.body.appendChild(modalEl);
-  }
+  if (!currentUser || !currentUser.id) return;
+  const modalEl = getCleanModalElement('modal-manage-store-item');
 
   modalEl.innerHTML = `
     <div class="modal-dialog modal-dialog-centered max-w-mobile">
@@ -279,17 +300,20 @@ function openStoreRewardManagerModal() {
         </div>
         <div class="modal-footer border-slate">
           <button type="button" class="btn btn-outline-slate btn-sm" data-bs-dismiss="modal">Cancel</button>
-          <button type="button" class="btn btn-cyan btn-sm fw-bold px-4" onclick="saveNewStoreItem()">Save Reward</button>
+          <button type="button" id="btn-submit-save-reward" class="btn btn-cyan btn-sm fw-bold px-4">Save Reward</button>
         </div>
       </div>
     </div>
   `;
 
   const bsModal = new bootstrap.Modal(modalEl);
+  document.getElementById('btn-submit-save-reward').onclick = () => saveNewStoreItem(bsModal);
   bsModal.show();
 }
 
-async function saveNewStoreItem() {
+async function saveNewStoreItem(bsModal) {
+  if (!currentUser || !currentUser.id) return;
+
   const name = document.getElementById('store-create-name').value.trim();
   const desc = document.getElementById('store-create-desc').value.trim();
   const price = parseInt(document.getElementById('store-create-price').value, 10);
@@ -302,7 +326,7 @@ async function saveNewStoreItem() {
   const db = await openDB();
   const tx = db.transaction('store_items', 'readwrite');
   tx.objectStore('store_items').add({
-    user_id: currentUser.id,
+    user_id: Number(currentUser.id),
     name,
     description: desc,
     price,
@@ -311,16 +335,27 @@ async function saveNewStoreItem() {
   });
 
   tx.oncomplete = () => {
-    const modalEl = document.getElementById('modal-manage-store-item');
-    const bsModal = bootstrap.Modal.getInstance(modalEl);
     if (bsModal) bsModal.hide();
-
     if (typeof renderStoreItems === 'function') renderStoreItems();
+    if (typeof triggerCloudSyncPush === 'function') triggerCloudSyncPush();
     showToast(`Reward "${name}" created!`, "success");
+  };
+  tx.onerror = (e) => {
+    showToast(`Failed to save reward: ${e.target.error.message}`, "danger");
   };
 }
 
+// Global window exposure
+window.escapeHtml = escapeHtml;
+window.initSetupView = initSetupView;
+window.updateUserRecord = updateUserRecord;
+window.openRuleManagerModal = openRuleManagerModal;
+window.openLabelManagerModal = openLabelManagerModal;
+window.openStoreRewardManagerModal = openStoreRewardManagerModal;
+window.saveNewRule = saveNewRule;
+window.saveNewRuleLabel = saveNewRuleLabel;
+window.saveNewStoreItem = saveNewStoreItem;
+
 document.addEventListener('DOMContentLoaded', () => {
-  // Bind Setup controls once view initializes
-  setTimeout(initSetupView, 150);
+  initSetupView();
 });
