@@ -130,7 +130,7 @@ async function authenticateUser(username, plainPassword) {
   });
 
   if (localUser) {
-    sessionStorage.setItem('mrstudy_sync_key', syncBearerKey);
+    localStorage.setItem('mrstudy_sync_key', syncBearerKey);
     return localUser;
   }
 
@@ -148,7 +148,7 @@ async function authenticateUser(username, plainPassword) {
       const cloudData = await resp.json();
       if (cloudData && cloudData.user) {
         const savedUser = await saveCloudUserLocally(cloudData.user, passwordHash);
-        sessionStorage.setItem('mrstudy_sync_key', syncBearerKey);
+        localStorage.setItem('mrstudy_sync_key', syncBearerKey);
         
         if (cloudData.rules || cloudData.inventory) {
           await restoreCloudStateToLocalDB(savedUser.id, cloudData);
@@ -202,7 +202,7 @@ async function autoProvisionAccount(username, passwordHash, syncBearerKey) {
         created_at: new Date().toISOString()
       });
 
-      sessionStorage.setItem('mrstudy_sync_key', syncBearerKey);
+      localStorage.setItem('mrstudy_sync_key', syncBearerKey);
     };
 
     tx.oncomplete = () => resolve(newUser);
@@ -221,7 +221,7 @@ async function saveCloudUserLocally(userObj, passwordHash) {
       password_hash: passwordHash,
       is_taskitator_linked: true
     };
-    delete record.id; // Allow IndexedDB autoIncrement to assign local id
+    delete record.id;
 
     const req = store.add(record);
     req.onsuccess = (e) => {
@@ -236,12 +236,12 @@ function setSessionUser(user) {
   if (!user || !user.id) return;
   user.id = Number(user.id);
   currentUser = user;
-  sessionStorage.setItem('mrstudy_session_uid', String(user.id));
+  localStorage.setItem('mrstudy_session_uid', String(user.id));
   updateAuthUI();
 }
 
 function getSessionUserId() {
-  const uid = sessionStorage.getItem('mrstudy_session_uid');
+  const uid = localStorage.getItem('mrstudy_session_uid');
   return uid ? Number(uid) : null;
 }
 
@@ -264,14 +264,14 @@ async function restoreSession() {
       if (currentUser) {
         currentUser.id = Number(currentUser.id);
       } else {
-        sessionStorage.removeItem('mrstudy_session_uid');
+        localStorage.removeItem('mrstudy_session_uid');
       }
       updateAuthUI();
       resolve(currentUser);
     };
     req.onerror = () => {
       currentUser = null;
-      sessionStorage.removeItem('mrstudy_session_uid');
+      localStorage.removeItem('mrstudy_session_uid');
       updateAuthUI();
       resolve(null);
     };
@@ -280,8 +280,8 @@ async function restoreSession() {
 
 function logoutUser() {
   currentUser = null;
-  sessionStorage.removeItem('mrstudy_session_uid');
-  sessionStorage.removeItem('mrstudy_sync_key');
+  localStorage.removeItem('mrstudy_session_uid');
+  localStorage.removeItem('mrstudy_sync_key');
   updateAuthUI();
   showToast("Logged out successfully.", "info");
 }
