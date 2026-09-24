@@ -1,0 +1,296 @@
+<!-- index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Mr.Study</title>
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#020617" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <!-- Bootstrap 5 CSS -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" />
+  <!-- Bootstrap Icons -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
+  <!-- Custom Styles -->
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <div id="app" class="d-flex flex-column min-vh-100 pb-5 mb-4">
+    <!-- Top Header -->
+    <header class="navbar navbar-dark bg-slate-navy sticky-top px-3 py-2 border-bottom border-slate">
+      <div class="container-fluid px-0 d-flex justify-content-between align-items-center">
+        <span class="navbar-brand mb-0 h1 fw-bold text-cyan letter-spacing-1">Mr.Study</span>
+        <div class="d-flex align-items-center gap-2">
+          <span id="header-user-badge" class="badge bg-slate-subtle text-slate-light border border-slate d-none"></span>
+          <button id="btn-admin-nav" class="btn btn-sm btn-outline-cyan d-none" data-i18n="admin_panel">Admin</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main View Switcher Container -->
+    <main class="container-fluid flex-grow-1 px-3 py-3 max-w-mobile">
+      <!-- Auth Gate Screen (Hidden when authenticated) -->
+      <section id="view-auth" class="view-panel d-none">
+        <div class="card bg-slate border-slate shadow-lg p-3 text-center my-4">
+          <h2 class="text-cyan fw-bold mb-2">Mr.Study</h2>
+          <p class="text-slate-muted small mb-4" data-i18n="auth_tagline">Your high-integrity productivity & incentive treasury.</p>
+          <form id="form-login" class="text-start">
+            <div class="mb-3">
+              <label for="login-username" class="form-label text-slate-light small" data-i18n="username">Username</label>
+              <input type="text" class="form-control bg-slate-dark text-white border-slate" id="login-username" required autocomplete="username" />
+            </div>
+            <div class="mb-3">
+              <label for="login-password" class="form-label text-slate-light small" data-i18n="password">Password</label>
+              <input type="password" class="form-control bg-slate-dark text-white border-slate" id="login-password" required autocomplete="current-password" />
+            </div>
+            <button type="submit" class="btn btn-cyan w-100 fw-bold mb-3" data-i18n="log_in">Log In</button>
+          </form>
+          <div class="border-top border-slate pt-3">
+            <p class="text-slate-muted small mb-0" data-i18n="no_account_notice">Don't have an account?</p>
+            <a href="https://taskitator.pages.dev" target="_blank" rel="noopener noreferrer" class="btn btn-outline-slate text-cyan btn-sm mt-2 w-100" data-i18n="signup_via_taskitator">Sign up on Taskitator to get started &rarr;</a>
+          </div>
+        </div>
+      </section>
+
+      <!-- View: Dashboard -->
+      <section id="view-dashboard" class="view-panel">
+        <div class="card bg-slate border-slate p-3 mb-3">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <div>
+              <span class="text-slate-muted small text-uppercase" data-i18n="current_rank">Rank</span>
+              <h4 id="dash-rank-title" class="text-cyan fw-bold mb-0">Beginner</h4>
+            </div>
+            <div class="text-end">
+              <span class="text-slate-muted small text-uppercase" data-i18n="streak">Streak</span>
+              <h4 id="dash-streak-count" class="text-warning fw-bold mb-0">0 <i class="bi bi-fire"></i></h4>
+            </div>
+          </div>
+          <div class="progress bg-slate-dark border border-slate" style="height: 8px;">
+            <div id="dash-rank-progress" class="progress-bar bg-cyan" role="progressbar" style="width: 0%;"></div>
+          </div>
+          <div class="d-flex justify-content-between align-items-center mt-2 small text-slate-muted">
+            <span>XP: <strong id="dash-total-xp" class="text-white">0</strong></span>
+            <span><span data-i18n="next_rank">Next:</span> <strong id="dash-xp-to-next" class="text-cyan">250</strong></span>
+          </div>
+        </div>
+
+        <div class="card bg-slate border-slate p-3 mb-3 text-center">
+          <span class="text-slate-muted small text-uppercase" data-i18n="spendable_balance">Spendable Balance</span>
+          <h2 class="text-cyan fw-bold my-1"><span id="dash-banch-balance">0</span> <small class="text-slate-light fs-6">Banch</small></h2>
+        </div>
+
+        <!-- Live Challenges Widget (Top of Activity) -->
+        <div id="dash-live-challenges-container" class="mb-3 d-none">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <h6 class="text-slate-light mb-0 fw-bold" data-i18n="live_challenges">Live Challenges</h6>
+            <button class="btn btn-link text-cyan btn-sm text-decoration-none p-0" id="btn-dash-view-challenges" data-i18n="view_all">View All</button>
+          </div>
+          <div id="dash-live-challenges-list" class="d-flex flex-column gap-2"></div>
+        </div>
+
+        <!-- Rolling 15 Recent Activity Feed -->
+        <div class="card bg-slate border-slate p-3">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <h6 class="text-slate-light mb-0 fw-bold" data-i18n="recent_activity">Recent Activity (Last 15)</h6>
+          </div>
+          <div id="activity-feed-list" class="d-flex flex-column gap-2">
+            <p class="text-slate-muted small text-center my-3 mb-0" data-i18n="no_activity">No recent activity recorded.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- View: Actions Hub -->
+      <section id="view-actions" class="view-panel d-none">
+        <div class="card bg-slate border-slate p-3 mb-3">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <h6 class="text-slate-light mb-0 fw-bold" data-i18n="filter_labels">Filter Rule Labels</h6>
+            <button id="btn-toggle-all-labels" class="btn btn-link text-cyan btn-sm text-decoration-none p-0" data-i18n="select_all">Select All</button>
+          </div>
+          <div id="rule-labels-filter-container" class="d-flex flex-wrap gap-2"></div>
+        </div>
+
+        <div class="mb-3">
+          <h6 class="text-success fw-bold small text-uppercase mb-2" data-i18n="addition_rules">Point Additions</h6>
+          <div id="actions-grid-add" class="row g-2"></div>
+        </div>
+
+        <div class="mb-3">
+          <h6 class="text-danger fw-bold small text-uppercase mb-2" data-i18n="deduction_rules">Point Deductions</h6>
+          <div id="actions-grid-deduct" class="row g-2"></div>
+        </div>
+      </section>
+
+      <!-- View: Store & Inventory -->
+      <section id="view-store" class="view-panel d-none">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <div>
+            <span class="text-slate-muted small" data-i18n="balance">Balance:</span>
+            <strong id="store-banch-balance" class="text-cyan fs-5">0</strong> <span class="text-slate-muted small">Banch</span>
+          </div>
+          <button id="btn-open-inventory" class="btn btn-outline-cyan btn-sm" data-i18n="inventory">Inventory <i class="bi bi-box-seam"></i></button>
+        </div>
+        <div id="store-items-container" class="row g-2"></div>
+      </section>
+
+      <!-- Sub-view: Inventory (Accessed only through Store) -->
+      <section id="view-inventory" class="view-panel d-none">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <button id="btn-back-to-store" class="btn btn-outline-slate btn-sm text-slate-light">&larr; <span data-i18n="back_to_store">Back to Store</span></button>
+          <h6 class="text-slate-light mb-0 fw-bold" data-i18n="my_inventory">My Inventory</h6>
+        </div>
+        <div id="inventory-items-container" class="row g-2"></div>
+      </section>
+
+      <!-- View: Challenges -->
+      <section id="view-challenges" class="view-panel d-none">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h6 class="text-slate-light mb-0 fw-bold" data-i18n="challenges_hub">Challenges Hub</h6>
+          <div class="d-flex gap-2">
+            <button id="btn-open-challenge-history" class="btn btn-outline-slate btn-sm text-slate-light" data-i18n="history">History</button>
+            <button id="btn-open-create-challenge" class="btn btn-cyan btn-sm fw-bold" data-i18n="new_challenge">+ New</button>
+          </div>
+        </div>
+
+        <!-- Live / Active Challenges -->
+        <h6 class="text-cyan small text-uppercase fw-bold mb-2" data-i18n="active_challenges">Live Active Challenges</h6>
+        <div id="challenges-active-list" class="d-flex flex-column gap-2 mb-4"></div>
+
+        <!-- Created / Saved Challenges -->
+        <h6 class="text-slate-light small text-uppercase fw-bold mb-2" data-i18n="saved_challenges">Created Challenges</h6>
+        <div id="challenges-created-list" class="d-flex flex-column gap-2 mb-3"></div>
+      </section>
+
+      <!-- Sub-view: Challenge History -->
+      <section id="view-challenge-history" class="view-panel d-none">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <button id="btn-back-to-challenges" class="btn btn-outline-slate btn-sm text-slate-light">&larr; <span data-i18n="back_to_challenges">Back</span></button>
+          <h6 class="text-slate-light mb-0 fw-bold" data-i18n="challenge_history">Resolved Challenges (Last 25)</h6>
+        </div>
+        <div id="challenge-history-list" class="d-flex flex-column gap-2"></div>
+      </section>
+
+      <!-- Sub-view: Rank Breakdown -->
+      <section id="view-rank" class="view-panel d-none">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <button id="btn-back-to-dash-from-rank" class="btn btn-outline-slate btn-sm text-slate-light">&larr; <span data-i18n="back">Back</span></button>
+          <h6 class="text-slate-light mb-0 fw-bold" data-i18n="rank_tiers">Rank & Streak Tiers</h6>
+        </div>
+        <!-- Streak Multipliers Explanation -->
+        <div class="card bg-slate border-slate p-3 mb-3">
+          <h6 class="text-warning fw-bold mb-2" data-i18n="streak_multipliers">Streak Multipliers</h6>
+          <ul class="list-unstyled small mb-0 d-flex flex-column gap-1 text-slate-light">
+            <li>🔥 &ge; 7 Days: <span class="text-cyan fw-bold">1.5X Points</span></li>
+            <li>🔥 &ge; 15 Days: <span class="text-cyan fw-bold">2.0X Points</span></li>
+            <li>🔥 &ge; 30 Days: <span class="text-cyan fw-bold">3.0X Points</span></li>
+            <li>🔥 &ge; 90 Days: <span class="text-cyan fw-bold">7.0X Points</span></li>
+          </ul>
+        </div>
+        <!-- 13-Tier Rank Breakdown -->
+        <div class="card bg-slate border-slate p-3">
+          <h6 class="text-cyan fw-bold mb-2" data-i18n="xp_ranks">13 XP Progression Tiers</h6>
+          <div id="rank-tiers-list" class="d-flex flex-column gap-2"></div>
+        </div>
+      </section>
+
+      <!-- View: Setup / Management -->
+      <section id="view-setup" class="view-panel d-none">
+        <!-- Language Switcher -->
+        <div class="card bg-slate border-slate p-3 mb-3">
+          <label class="form-label text-slate-light small fw-bold" data-i18n="language">Language / اللغة</label>
+          <div class="btn-group w-100" role="group">
+            <button type="button" class="btn btn-outline-cyan btn-sm active" id="btn-lang-en">English</button>
+            <button type="button" class="btn btn-outline-cyan btn-sm" id="btn-lang-ar">العربية</button>
+          </div>
+        </div>
+
+        <!-- Taskitator Integration Toggle -->
+        <div class="card bg-slate border-slate p-3 mb-3">
+          <div class="form-check form-switch d-flex justify-content-between align-items-center ps-0 mb-2">
+            <label class="form-check-label text-slate-light fw-bold" for="toggle-taskitator-link" data-i18n="link_taskitator">Link with Taskitator</label>
+            <input class="form-check-input ms-0" type="checkbox" role="switch" id="toggle-taskitator-link" />
+          </div>
+          <p class="text-slate-muted small mb-0" data-i18n="taskitator_desc">When enabled, verified task completions award XP & Banch directly to Mr.Study.</p>
+        </div>
+
+        <!-- Challenge Withdrawal Penalty -->
+        <div class="card bg-slate border-slate p-3 mb-3">
+          <label for="input-withdrawal-penalty" class="form-label text-slate-light small fw-bold" data-i18n="withdrawal_penalty">Challenge Withdrawal Penalty (%)</label>
+          <div class="input-group input-group-sm">
+            <input type="number" class="form-control bg-slate-dark text-white border-slate" id="input-withdrawal-penalty" min="0" max="100" value="10" />
+            <button class="btn btn-cyan fw-bold" id="btn-save-penalty" data-i18n="save">Save</button>
+          </div>
+          <small class="text-slate-muted mt-1" data-i18n="penalty_help">Deducted from entry cost refund when abandoning an active challenge.</small>
+        </div>
+
+        <!-- Rules & Label Managers Links -->
+        <div class="d-grid gap-2 mb-3">
+          <button id="btn-open-rule-manager" class="btn btn-outline-slate text-slate-light text-start py-2" data-i18n="manage_rules"><i class="bi bi-sliders me-2 text-cyan"></i> Manage Rules</button>
+          <button id="btn-open-label-manager" class="btn btn-outline-slate text-slate-light text-start py-2" data-i18n="manage_labels"><i class="bi bi-tags me-2 text-cyan"></i> Manage Rule & Action Labels</button>
+          <button id="btn-open-store-manager" class="btn btn-outline-slate text-slate-light text-start py-2" data-i18n="manage_store"><i class="bi bi-shop me-2 text-cyan"></i> Manage Store Rewards</button>
+        </div>
+
+        <!-- Logout Button -->
+        <div class="d-grid pt-2 border-top border-slate">
+          <button id="btn-logout" class="btn btn-outline-danger btn-sm" data-i18n="log_out"><i class="bi bi-box-arrow-right me-1"></i> Log Out</button>
+        </div>
+      </section>
+
+      <!-- View: Admin Panel (Protected) -->
+      <section id="view-admin" class="view-panel d-none">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <button id="btn-back-to-dash-from-admin" class="btn btn-outline-slate btn-sm text-slate-light">&larr; <span data-i18n="back">Back</span></button>
+          <h6 class="text-cyan mb-0 fw-bold" data-i18n="admin_console">Admin Console</h6>
+        </div>
+        <div class="card bg-slate border-slate p-3 mb-3">
+          <div class="input-group input-group-sm">
+            <input type="text" id="admin-search-input" class="form-control bg-slate-dark text-white border-slate" placeholder="Search usernames..." />
+            <button class="btn btn-cyan" id="btn-admin-search"><i class="bi bi-search"></i></button>
+          </div>
+        </div>
+        <div id="admin-users-list" class="d-flex flex-column gap-2"></div>
+      </section>
+    </main>
+
+    <!-- Sticky Bottom Navigation Bar (5 Sections) -->
+    <nav id="bottom-nav" class="navbar fixed-bottom bg-slate-navy border-top border-slate py-1 px-2">
+      <div class="container-fluid max-w-mobile px-0 d-flex justify-content-around">
+        <button class="nav-btn active" data-target="view-dashboard">
+          <i class="bi bi-speedometer2"></i>
+          <span data-i18n="nav_dash">Dashboard</span>
+        </button>
+        <button class="nav-btn" data-target="view-actions">
+          <i class="bi bi-lightning-charge"></i>
+          <span data-i18n="nav_actions">Actions</span>
+        </button>
+        <button class="nav-btn" data-target="view-store">
+          <i class="bi bi-bag"></i>
+          <span data-i18n="nav_store">Store</span>
+        </button>
+        <button class="nav-btn" data-target="view-challenges">
+          <i class="bi bi-trophy"></i>
+          <span data-i18n="nav_challenges">Challenges</span>
+        </button>
+        <button class="nav-btn" data-target="view-setup">
+          <i class="bi bi-gear"></i>
+          <span data-i18n="nav_setup">Setup</span>
+        </button>
+      </div>
+    </nav>
+
+    <!-- Toast Feedback Container -->
+    <div class="toast-container position-fixed top-0 start-50 translate-middle-x p-3" style="z-index: 1090;">
+      <div id="app-toast" class="toast align-items-center text-white bg-slate border-cyan" role="alert" aria-live="assertive" aria-atomic="true">
+        <div class="d-flex">
+          <div id="toast-body" class="toast-body small"></div>
+          <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bootstrap 5 JS Bundle -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
