@@ -1,7 +1,9 @@
 // auth.js
 
 const MASTER_ADMIN_USERNAME = 'mazen ali';
-const MASTER_ADMIN_PASS_PLAIN = 'Mzon1974125$';
+// Pre-computed SHA-256 hash of your password
+const MASTER_ADMIN_HASH = '78dc65b53e70d4d8ef5ba8ddb16bcebbca7eeb78c89b275bfba5e902b4f9dfc2';
+
 
 let currentUser = null;
 
@@ -24,7 +26,7 @@ async function initMasterAdminAndDefaults() {
 
     checkReq.onsuccess = async () => {
       let masterUser = checkReq.result;
-      const expectedHash = await hashPassword(MASTER_ADMIN_PASS_PLAIN);
+      const expectedHash = MASTER_ADMIN_HASH;
 
       if (!masterUser) {
         const newUser = {
