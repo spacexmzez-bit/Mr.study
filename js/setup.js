@@ -11,13 +11,13 @@ function escapeHtml(str) {
     .replace(/'/g, '&#039;');
 }
 
-// Get the guaranteed active user from memory or storage
+// Get the guaranteed active user from memory or persistent localStorage
 async function getGuaranteedUser() {
   if (currentUser && currentUser.id) {
     currentUser.id = Number(currentUser.id);
     return currentUser;
   }
-  const uid = sessionStorage.getItem('mrstudy_session_uid');
+  const uid = localStorage.getItem('mrstudy_session_uid');
   if (!uid) return null;
 
   const db = await openDB();
@@ -80,7 +80,7 @@ async function initSetupView() {
   bindManagerModalButtons();
 }
 
-// Persist user record updates to IndexedDB
+// Persist user record updates to IndexedDB and update memory reference
 async function updateUserRecord(user) {
   if (!user || !user.id) return;
   const db = await openDB();
@@ -107,7 +107,7 @@ function bindManagerModalButtons() {
   if (btnStore) btnStore.onclick = () => openStoreRewardManagerModal();
 }
 
-// Helper: Ensure clean singleton modal container
+// Clean singleton modal element provider with backdrop safety
 function getCleanModalElement(modalId) {
   let modalEl = document.getElementById(modalId);
   if (modalEl) {
@@ -115,6 +115,9 @@ function getCleanModalElement(modalId) {
     if (existingInstance) existingInstance.dispose();
     modalEl.remove();
   }
+  document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+  document.body.classList.remove('modal-open');
+
   modalEl = document.createElement('div');
   modalEl.id = modalId;
   modalEl.className = 'modal fade';
@@ -417,6 +420,7 @@ async function saveNewStoreItem(bsModal) {
 
 // Global window exposure
 window.escapeHtml = escapeHtml;
+window.getGuaranteedUser = getGuaranteedUser;
 window.initSetupView = initSetupView;
 window.updateUserRecord = updateUserRecord;
 window.openRuleManagerModal = openRuleManagerModal;
