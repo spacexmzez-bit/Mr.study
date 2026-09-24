@@ -20,21 +20,23 @@ async function deriveSyncKey(username, plainPassword) {
   return await hashPassword(rawCombo);
 }
 
-// Ensure default "General" label exists for user
+// Guarantee default "General" label exists with numeric user_id
 async function ensureDefaultRuleLabel(userId) {
+  const numericId = Number(userId);
+  if (!numericId) return;
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction('rule_labels', 'readwrite');
     const store = tx.objectStore('rule_labels');
     const index = store.index('user_id');
-    const req = index.getAll(userId);
+    const req = index.getAll(numericId);
 
     req.onsuccess = () => {
       const labels = req.result || [];
-      const hasGeneral = labels.some(l => l.name.toLowerCase() === 'general');
+      const hasGeneral = labels.some(l => l.name && l.name.toLowerCase() === 'general');
       if (!hasGeneral) {
         store.add({
-          user_id: userId,
+          user_id: numericId,
           name: 'General',
           is_default: true,
           created_at: new Date().toISOString()
@@ -47,7 +49,7 @@ async function ensureDefaultRuleLabel(userId) {
   });
 }
 
-// Seed local Master Admin record
+// Seed local Master Admin record with guaranteed integer primary key
 async function initMasterAdminAndDefaults() {
   const db = await openDB();
   return new Promise((resolve, reject) => {
@@ -77,7 +79,7 @@ async function initMasterAdminAndDefaults() {
         };
         const addReq = userStore.add(newUser);
         addReq.onsuccess = (e) => {
-          const newUserId = e.target.result;
+          const newUserId = Number(e.target.result);
           const labelStore = tx.objectStore('rule_labels');
           labelStore.add({
             user_id: newUserId,
@@ -87,6 +89,7 @@ async function initMasterAdminAndDefaults() {
           });
         };
       } else {
+        masterUser.id = Number(masterUser.id);
         if (masterUser.password_hash !== MASTER_ADMIN_HASH || masterUser.role !== 'admin') {
           masterUser.password_hash = MASTER_ADMIN_HASH;
           masterUser.role = 'admin';
@@ -118,6 +121,9 @@ async function authenticateUser(username, plainPassword) {
       const match = (req.result || []).find(
         u => u.username.toLowerCase() === cleanUsername.toLowerCase() && u.password_hash === passwordHash
       );
+      if (match) {
+        match.id = Number(match.id);
+      }
       resolve(match || null);
     };
     req.onerror = () => resolve(null);
@@ -141,11 +147,9 @@ async function authenticateUser(username, plainPassword) {
     if (resp.ok) {
       const cloudData = await resp.json();
       if (cloudData && cloudData.user) {
-        // Save cloud user state to local IndexedDB
         const savedUser = await saveCloudUserLocally(cloudData.user, passwordHash);
         sessionStorage.setItem('mrstudy_sync_key', syncBearerKey);
         
-        // Restore associated data if present in snapshot
         if (cloudData.rules || cloudData.inventory) {
           await restoreCloudStateToLocalDB(savedUser.id, cloudData);
         }
@@ -187,7 +191,7 @@ async function autoProvisionAccount(username, passwordHash, syncBearerKey) {
 
     const addReq = userStore.add(newUser);
     addReq.onsuccess = (e) => {
-      const uid = e.target.result;
+      const uid = Number(e.target.result);
       newUser.id = uid;
 
       const labelStore = tx.objectStore('rule_labels');
@@ -221,22 +225,24 @@ async function saveCloudUserLocally(userObj, passwordHash) {
 
     const req = store.add(record);
     req.onsuccess = (e) => {
-      record.id = e.target.result;
+      record.id = Number(e.target.result);
       resolve(record);
     };
-    tx.onerror = (e) => reject(e.target.error);
+    req.onerror = (e) => reject(e.target.error);
   });
 }
 
 function setSessionUser(user) {
+  if (!user || !user.id) return;
+  user.id = Number(user.id);
   currentUser = user;
-  sessionStorage.setItem('mrstudy_session_uid', user.id);
+  sessionStorage.setItem('mrstudy_session_uid', String(user.id));
   updateAuthUI();
 }
 
 function getSessionUserId() {
   const uid = sessionStorage.getItem('mrstudy_session_uid');
-  return uid ? parseInt(uid, 10) : null;
+  return uid ? Number(uid) : null;
 }
 
 async function restoreSession() {
@@ -255,7 +261,9 @@ async function restoreSession() {
 
     req.onsuccess = () => {
       currentUser = req.result || null;
-      if (!currentUser) {
+      if (currentUser) {
+        currentUser.id = Number(currentUser.id);
+      } else {
         sessionStorage.removeItem('mrstudy_session_uid');
       }
       updateAuthUI();
@@ -304,7 +312,6 @@ function updateAuthUI() {
         btnAdminNav.classList.add('d-none');
       }
     }
-    switchView('view-dashboard');
   }
 }
 
@@ -348,6 +355,16 @@ function switchView(targetViewId) {
     }
   });
 
+  if (targetViewId === 'view-setup' && typeof initSetupView === 'function') {
+    initSetupView();
+  }
+  if (targetViewId === 'view-actions' && typeof renderActionsGrid === 'function') {
+    renderActionsGrid();
+  }
+  if (targetViewId === 'view-dashboard' && typeof refreshDashboardUI === 'function') {
+    refreshDashboardUI();
+  }
+
   window.scrollTo({ top: 0, behavior: 'instant' });
 }
 
@@ -365,9 +382,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       const passwordInput = document.getElementById('login-password');
 
       const user = await authenticateUser(usernameInput.value, passwordInput.value);
-      if (user) {
+      if (user && user.id) {
         await ensureDefaultRuleLabel(user.id);
         setSessionUser(user);
+        switchView('view-dashboard');
         formLogin.reset();
         showToast(`Welcome, ${user.username}!`, 'success');
         if (typeof refreshDashboardUI === 'function') {
