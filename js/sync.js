@@ -10,17 +10,30 @@ function triggerCloudSyncPush() {
   if (!syncKey) return;
 
   clearTimeout(syncDebounceTimer);
-  syncDebounceTimer = setTimeout(async () => {
-    await pushStateToCloudWorker(syncKey);
+  syncDebounceTimer = setTimeout(() => {
+    pushStateToCloudWorker(syncKey).catch((err) => {
+      console.warn('Debounced background sync failed:', err.message);
+    });
   }, 2000);
 }
 
 // Compile state payload and send to Worker KV
 async function pushStateToCloudWorker(syncKey) {
-  if (!currentUser || !currentUser.id) return false;
+  if (!currentUser) {
+    throw new Error('Current user context is missing. Please reload the app.');
+  }
+
+  const userIdRaw = currentUser.id;
+  if (userIdRaw === undefined || userIdRaw === null || userIdRaw === '') {
+    throw new Error('User record contains an invalid or missing ID.');
+  }
+
+  const numericUserId = Number(userIdRaw);
+  if (Number.isNaN(numericUserId)) {
+    throw new Error(`Invalid numeric user ID: ${userIdRaw}`);
+  }
 
   const db = await openDB();
-  const numericUserId = Number(currentUser.id);
 
   const [rules, ruleLabels, storeItems, userInventory, challenges, exportableRules] = await Promise.all([
     getAllRecords(db, 'rules', numericUserId),
@@ -28,8 +41,8 @@ async function pushStateToCloudWorker(syncKey) {
     getAllRecords(db, 'store_items', numericUserId),
     getAllRecords(db, 'user_inventory', numericUserId),
     getAllRecords(db, 'challenges', numericUserId),
-    (typeof getExportableRulesForTaskitator === 'function') 
-      ? getExportableRulesForTaskitator(numericUserId) 
+    (typeof getExportableRulesForTaskitator === 'function')
+      ? getExportableRulesForTaskitator(numericUserId)
       : []
   ]);
 
@@ -50,15 +63,16 @@ async function pushStateToCloudWorker(syncKey) {
       lang_pref: currentUser.lang_pref || 'en'
     },
     rules,
-    study_rules: exportableRules, // Worker specifically looks for "study_rules" in route C
+    study_rules: exportableRules,
     rule_labels: ruleLabels,
     store_items: storeItems,
     user_inventory: userInventory,
     challenges
   };
 
+  let resp;
   try {
-    const resp = await fetch(`${SYNC_WORKER_URL}/sync/push`, {
+    resp = await fetch(`${SYNC_WORKER_URL}/sync/push`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -68,25 +82,24 @@ async function pushStateToCloudWorker(syncKey) {
       },
       body: JSON.stringify(payload)
     });
-
-    if (resp.ok) {
-      console.log('Synced successfully to Cloudflare Worker KV.');
-      return true;
-    } else {
-      const errText = await resp.text();
-      console.warn(`Worker rejected sync push: ${resp.status} - ${errText}`);
-      throw new Error(`Cloud sync failed (Status: ${resp.status})`);
-    }
-  } catch (err) {
-    console.warn('Sync push skipped:', err);
-    throw err; 
+  } catch (netErr) {
+    throw new Error(`Network/CORS fetch error: ${netErr.message}`);
   }
+
+  if (!resp.ok) {
+    const errText = await resp.text();
+    throw new Error(`Worker status ${resp.status}: ${errText || resp.statusText}`);
+  }
+
+  return true;
 }
 
 // Pull snapshot on demand
 async function pullStateFromCloudWorker() {
   const syncKey = localStorage.getItem('mrstudy_sync_key');
-  if (!syncKey || !currentUser || !currentUser.id) return false;
+  if (!syncKey || !currentUser || currentUser.id === undefined || currentUser.id === null) {
+    return false;
+  }
 
   try {
     const resp = await fetch(`${SYNC_WORKER_URL}/sync/pull`, {
@@ -105,73 +118,119 @@ async function pullStateFromCloudWorker() {
         if (typeof refreshDashboardUI === 'function') await refreshDashboardUI();
         return true;
       }
+    } else {
+      const errText = await resp.text();
+      console.warn(`Sync pull rejected: ${resp.status} - ${errText}`);
     }
     return false;
   } catch (err) {
-    console.warn('Sync pull failed:', err);
+    console.warn('Sync pull skipped (offline or network error):', err);
     return false;
   }
 }
 
 // Immediate bidirectional sync (pull ledger updates, push current local state)
 async function forceCloudSyncBidirectional() {
-  const syncKey = localStorage.getItem('mrstudy_sync_key');
-  if (!syncKey) {
-    throw new Error('Sync bearer token missing. Please log in again.');
-  }
-
-  let ingestedTasks = 0;
-
-  // 1. Pull ledger completions from Taskitator bridge
-  if (typeof pullTaskitatorAuditLedger === 'function') {
-    const bridgeResult = await pullTaskitatorAuditLedger();
-    if (bridgeResult && typeof bridgeResult.ingestedCount === 'number') {
-      ingestedTasks = bridgeResult.ingestedCount;
+  try {
+    const syncKey = localStorage.getItem('mrstudy_sync_key');
+    if (!syncKey) {
+      throw new Error('Sync bearer token missing. Please log in again.');
     }
+
+    let ingestedTasks = 0;
+
+    // 1. Pull ledger completions from Taskitator bridge
+    if (typeof pullTaskitatorAuditLedger === 'function') {
+      const bridgeResult = await pullTaskitatorAuditLedger();
+      if (bridgeResult && typeof bridgeResult.ingestedCount === 'number') {
+        ingestedTasks = bridgeResult.ingestedCount;
+      }
+    }
+
+    // 2. Pull remote user state
+    const pulled = await pullStateFromCloudWorker();
+
+    // 3. Push active local state
+    const pushed = await pushStateToCloudWorker(syncKey);
+
+    if (typeof refreshDashboardUI === 'function') await refreshDashboardUI();
+    if (typeof renderActionsGrid === 'function') renderActionsGrid();
+
+    alert('Sync successful!');
+    return { ingestedTasks, pulled, pushed };
+  } catch (err) {
+    // Shows popup directly on mobile screen
+    alert(`SYNC FAILED:\n\n${err.message}`);
+    throw err;
   }
-
-  // 2. Pull remote user state
-  const pulled = await pullStateFromCloudWorker();
-
-  // 3. Push active local state
-  const pushed = await pushStateToCloudWorker(syncKey);
-  if (!pushed) {
-    throw new Error('Failed to push state snapshot to Cloudflare KV.');
-  }
-
-  if (typeof refreshDashboardUI === 'function') await refreshDashboardUI();
-  if (typeof renderActionsGrid === 'function') renderActionsGrid();
-
-  return { ingestedTasks, pulled, pushed };
 }
 
 function getAllRecords(db, storeName, userId) {
   const numericUserId = Number(userId);
   return new Promise((resolve) => {
-    const tx = db.transaction(storeName, 'readonly');
-    const store = tx.objectStore(storeName);
-    const index = store.index('user_id');
-    const req = index.getAll(numericUserId);
-    req.onsuccess = () => resolve(req.result || []);
-    req.onerror = () => resolve([]);
+    try {
+      if (!db.objectStoreNames.contains(storeName)) {
+        console.warn(`IndexedDB store "${storeName}" does not exist.`);
+        return resolve([]);
+      }
+      const tx = db.transaction(storeName, 'readonly');
+      const store = tx.objectStore(storeName);
+      const index = store.index('user_id');
+      const req = index.getAll(numericUserId);
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = (err) => {
+        console.warn(`Error reading ${storeName}:`, err);
+        resolve([]);
+      };
+    } catch (e) {
+      console.warn(`Failed reading store ${storeName}:`, e);
+      resolve([]);
+    }
   });
 }
 
 async function restoreCloudStateToLocalDB(userId, cloudData) {
   const numericUserId = Number(userId);
   const db = await openDB();
-  const tx = db.transaction(['users', 'rules', 'rule_labels', 'store_items', 'user_inventory', 'challenges'], 'readwrite');
 
-  if (cloudData.user && currentUser) {
+  const storeNames = ['users', 'rules', 'rule_labels', 'store_items', 'user_inventory', 'challenges']
+    .filter((store) => db.objectStoreNames.contains(store));
+
+  const tx = db.transaction(storeNames, 'readwrite');
+
+  // 1. Restore user data
+  if (cloudData.user && currentUser && storeNames.includes('users')) {
     Object.assign(currentUser, cloudData.user);
     currentUser.id = numericUserId;
     tx.objectStore('users').put(currentUser);
   }
 
-  tx.oncomplete = () => {
-    if (typeof refreshDashboardUI === 'function') refreshDashboardUI();
-    if (typeof renderActionsGrid === 'function') renderActionsGrid();
-  };
+  // 2. Restore collection entities
+  const collections = [
+    { key: 'rules', store: 'rules' },
+    { key: 'rule_labels', store: 'rule_labels' },
+    { key: 'store_items', store: 'store_items' },
+    { key: 'user_inventory', store: 'user_inventory' },
+    { key: 'challenges', store: 'challenges' }
+  ];
+
+  for (const { key, store } of collections) {
+    if (storeNames.includes(store) && Array.isArray(cloudData[key])) {
+      const targetStore = tx.objectStore(store);
+      for (const item of cloudData[key]) {
+        targetStore.put({ ...item, user_id: numericUserId });
+      }
+    }
+  }
+
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = () => {
+      if (typeof refreshDashboardUI === 'function') refreshDashboardUI();
+      if (typeof renderActionsGrid === 'function') renderActionsGrid();
+      resolve(true);
+    };
+    tx.onerror = (evt) => reject(evt.target.error);
+  });
 }
 
 // Global window exposure
