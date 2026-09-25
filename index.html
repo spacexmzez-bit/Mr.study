@@ -214,6 +214,19 @@
           <p class="text-slate-muted small mb-0" data-i18n="taskitator_desc">When enabled, verified task completions award XP & Banch directly to Mr.Study.</p>
         </div>
 
+        <!-- Cloud Sync Controls -->
+        <div class="card bg-slate border-slate p-3 mb-3">
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <span class="text-slate-light small fw-bold" data-i18n="cloud_sync">Cloudflare Sync</span>
+            <span id="sync-status-indicator" class="badge bg-slate-dark text-slate-muted border border-slate" style="font-size: 0.7rem;">Idle</span>
+          </div>
+          <p class="text-slate-muted small mb-3">Force an immediate bidirectional push & pull with Cloudflare KV storage.</p>
+          <button id="btn-force-sync" class="btn btn-outline-cyan btn-sm fw-bold w-100">
+            <i class="bi bi-arrow-repeat me-1" id="icon-force-sync"></i>
+            <span id="label-force-sync">Force Sync Now</span>
+          </button>
+        </div>
+
         <!-- Challenge Withdrawal Penalty -->
         <div class="card bg-slate border-slate p-3 mb-3">
           <label for="input-withdrawal-penalty" class="form-label text-slate-light small fw-bold" data-i18n="withdrawal_penalty">Challenge Withdrawal Penalty (%)</label>
