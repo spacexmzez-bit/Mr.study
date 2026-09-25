@@ -19,6 +19,28 @@ async function fetchUserRules(userId) {
   });
 }
 
+// Format rules for external Taskitator discovery contract:
+// { id, title, min_xp, max_xp, min_banch, max_banch, requires_ai, type }
+async function getExportableRulesForTaskitator(userId) {
+  const rules = await fetchUserRules(userId);
+  return rules.map(rule => {
+    const minVal = Number(rule.min_points) || 0;
+    const maxVal = Number(rule.max_points) || minVal;
+
+    return {
+      id: Number(rule.id),
+      title: rule.name || 'Untitled Rule',
+      min_xp: minVal,
+      max_xp: maxVal,
+      min_banch: minVal,
+      max_banch: maxVal,
+      requires_ai: Boolean(rule.requires_ai || false),
+      type: rule.type || 'add',
+      jump_interval: Number(rule.jump_interval) || 1
+    };
+  });
+}
+
 // Render Rule Label Filter Checkboxes on Actions view
 async function renderRuleLabelFilters() {
   if (!currentUser || !currentUser.id) return;
@@ -260,6 +282,7 @@ async function saveActionLabelIfUnique(userId, labelName) {
 
 // Global window exposure
 window.fetchUserRules = fetchUserRules;
+window.getExportableRulesForTaskitator = getExportableRulesForTaskitator;
 window.renderRuleLabelFilters = renderRuleLabelFilters;
 window.handleFilterCheckboxChange = handleFilterCheckboxChange;
 window.renderActionsGrid = renderActionsGrid;
