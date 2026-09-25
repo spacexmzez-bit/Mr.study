@@ -44,6 +44,7 @@ async function initSetupView() {
   const toggleTaskitator = document.getElementById('toggle-taskitator-link');
   const inputPenalty = document.getElementById('input-withdrawal-penalty');
   const btnSavePenalty = document.getElementById('btn-save-penalty');
+  const btnForceSync = document.getElementById('btn-force-sync');
 
   if (toggleTaskitator) {
     toggleTaskitator.checked = !!user.is_taskitator_linked;
@@ -77,7 +78,56 @@ async function initSetupView() {
     };
   }
 
+  if (btnForceSync) {
+    btnForceSync.onclick = async () => {
+      await handleForceSyncTrigger();
+    };
+  }
+
   bindManagerModalButtons();
+}
+
+// Immediate bidirectional sync trigger with visual feedback
+async function handleForceSyncTrigger() {
+  const btn = document.getElementById('btn-force-sync');
+  const icon = document.getElementById('icon-force-sync');
+  const label = document.getElementById('label-force-sync');
+  const statusBadge = document.getElementById('sync-status-indicator');
+
+  if (btn) btn.disabled = true;
+  if (icon) icon.className = 'spinner-border spinner-border-sm me-1';
+  if (label) label.textContent = 'Syncing...';
+  if (statusBadge) {
+    statusBadge.textContent = 'In Progress';
+    statusBadge.className = 'badge bg-warning text-dark';
+  }
+
+  try {
+    if (typeof forceCloudSyncBidirectional === 'function') {
+      await forceCloudSyncBidirectional();
+    } else if (typeof triggerCloudSyncPush === 'function') {
+      await triggerCloudSyncPush();
+    } else {
+      throw new Error('Sync engine not loaded');
+    }
+
+    if (statusBadge) {
+      statusBadge.textContent = 'Synced';
+      statusBadge.className = 'badge bg-success text-white';
+    }
+    showToast('Cloud sync completed successfully.', 'success');
+  } catch (err) {
+    console.error('Manual force sync failed:', err);
+    if (statusBadge) {
+      statusBadge.textContent = 'Sync Error';
+      statusBadge.className = 'badge bg-danger text-white';
+    }
+    showToast('Sync failed. Please check your network or credentials.', 'danger');
+  } finally {
+    if (btn) btn.disabled = false;
+    if (icon) icon.className = 'bi bi-arrow-repeat me-1';
+    if (label) label.textContent = 'Force Sync Now';
+  }
 }
 
 // Persist user record updates to IndexedDB and update memory reference
@@ -423,6 +473,7 @@ window.escapeHtml = escapeHtml;
 window.getGuaranteedUser = getGuaranteedUser;
 window.initSetupView = initSetupView;
 window.updateUserRecord = updateUserRecord;
+window.handleForceSyncTrigger = handleForceSyncTrigger;
 window.openRuleManagerModal = openRuleManagerModal;
 window.openLabelManagerModal = openLabelManagerModal;
 window.openStoreRewardManagerModal = openStoreRewardManagerModal;
