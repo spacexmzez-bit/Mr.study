@@ -36,6 +36,46 @@ async function getGuaranteedUser() {
   });
 }
 
+// Check real-time bridge status against Cloudflare Worker
+async function checkTaskitatorBridgeStatus(user) {
+  const statusBadge = document.getElementById('sync-status-indicator');
+  if (!statusBadge) return;
+
+  if (!user || !user.is_taskitator_linked) {
+    statusBadge.textContent = 'Unlinked';
+    statusBadge.className = 'badge bg-slate-dark text-slate-muted border border-slate';
+    return;
+  }
+
+  const syncKey = localStorage.getItem('mrstudy_sync_key');
+  if (!syncKey) {
+    statusBadge.textContent = 'Missing Token';
+    statusBadge.className = 'badge bg-warning text-dark';
+    return;
+  }
+
+  try {
+    const resp = await fetch(`${SYNC_WORKER_URL}/sync/bridge/taskitator-ledger`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${syncKey}`,
+        'X-User-Name': user.username
+      }
+    });
+
+    if (resp.ok || resp.status === 404) {
+      statusBadge.textContent = 'Bridge Active';
+      statusBadge.className = 'badge bg-success text-white';
+    } else {
+      statusBadge.textContent = `Status: ${resp.status}`;
+      statusBadge.className = 'badge bg-danger text-white';
+    }
+  } catch (err) {
+    statusBadge.textContent = 'Offline';
+    statusBadge.className = 'badge bg-secondary text-white';
+  }
+}
+
 // Initialize and bind Setup / Management controls
 async function initSetupView() {
   const user = await getGuaranteedUser();
@@ -52,8 +92,9 @@ async function initSetupView() {
       user.is_taskitator_linked = e.target.checked;
       await updateUserRecord(user);
       if (typeof triggerCloudSyncPush === 'function') triggerCloudSyncPush();
+      await checkTaskitatorBridgeStatus(user);
       showToast(
-        user.is_taskitator_linked ? "Taskitator integration linked." : "Taskitator integration unlinked.",
+        user.is_taskitator_linked ? "Taskitator integration enabled." : "Taskitator integration disabled.",
         "info"
       );
     };
@@ -84,6 +125,7 @@ async function initSetupView() {
     };
   }
 
+  await checkTaskitatorBridgeStatus(user);
   bindManagerModalButtons();
 }
 
@@ -98,31 +140,37 @@ async function handleForceSyncTrigger() {
   if (icon) icon.className = 'spinner-border spinner-border-sm me-1';
   if (label) label.textContent = 'Syncing...';
   if (statusBadge) {
-    statusBadge.textContent = 'In Progress';
+    statusBadge.textContent = 'Syncing...';
     statusBadge.className = 'badge bg-warning text-dark';
   }
 
   try {
+    let result = null;
     if (typeof forceCloudSyncBidirectional === 'function') {
-      await forceCloudSyncBidirectional();
+      result = await forceCloudSyncBidirectional();
     } else if (typeof triggerCloudSyncPush === 'function') {
       await triggerCloudSyncPush();
+      result = { ingestedTasks: 0, pushed: true };
     } else {
-      throw new Error('Sync engine not loaded');
+      throw new Error('Sync engine not initialized');
     }
 
     if (statusBadge) {
       statusBadge.textContent = 'Synced';
       statusBadge.className = 'badge bg-success text-white';
     }
-    showToast('Cloud sync completed successfully.', 'success');
+
+    const taskMsg = (result && result.ingestedTasks > 0)
+      ? ` (Ingested ${result.ingestedTasks} tasks)`
+      : '';
+    showToast(`Cloud sync complete!${taskMsg}`, 'success');
   } catch (err) {
     console.error('Manual force sync failed:', err);
     if (statusBadge) {
       statusBadge.textContent = 'Sync Error';
       statusBadge.className = 'badge bg-danger text-white';
     }
-    showToast('Sync failed. Please check your network or credentials.', 'danger');
+    showToast(err.message || 'Sync failed. Please check network connection.', 'danger');
   } finally {
     if (btn) btn.disabled = false;
     if (icon) icon.className = 'bi bi-arrow-repeat me-1';
@@ -471,6 +519,7 @@ async function saveNewStoreItem(bsModal) {
 // Global window exposure
 window.escapeHtml = escapeHtml;
 window.getGuaranteedUser = getGuaranteedUser;
+window.checkTaskitatorBridgeStatus = checkTaskitatorBridgeStatus;
 window.initSetupView = initSetupView;
 window.updateUserRecord = updateUserRecord;
 window.handleForceSyncTrigger = handleForceSyncTrigger;
