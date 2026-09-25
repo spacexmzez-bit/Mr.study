@@ -1,5 +1,5 @@
 // sw.js
-const CACHE_NAME = 'mr-study-v1';
+const CACHE_NAME = 'mr-study-v2';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
@@ -16,6 +16,9 @@ const ASSETS_TO_CACHE = [
   './js/store.js',
   './js/inventory.js',
   './js/challenges.js',
+  './js/challenge_modals.js',
+  './js/setup.js',
+  './js/sync.js',
   './js/bridge.js',
   'https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css',
   'https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css',
@@ -46,6 +49,14 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
+
+  const url = new URL(event.request.url);
+
+  // Bypass service worker cache completely for cloud worker API calls
+  if (url.hostname.includes('workers.dev') || url.pathname.includes('/sync')) {
+    return;
+  }
+
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
       if (cachedResponse) {
@@ -61,7 +72,7 @@ self.addEventListener('fetch', (event) => {
         });
         return networkResponse;
       }).catch(() => {
-        if (event.request.headers.get('accept').includes('text/html')) {
+        if (event.request.headers.get('accept') && event.request.headers.get('accept').includes('text/html')) {
           return caches.match('./index.html');
         }
       });
