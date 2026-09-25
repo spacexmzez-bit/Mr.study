@@ -10,30 +10,30 @@ function triggerCloudSyncPush() {
   if (!syncKey) return;
 
   clearTimeout(syncDebounceTimer);
-  syncDebounceTimer = setTimeout(() => {
-    pushStateToCloudWorker(syncKey).catch((err) => {
-      console.warn('Debounced background sync failed:', err.message);
-    });
+  syncDebounceTimer = setTimeout(async () => {
+    await pushStateToCloudWorker(syncKey);
+    syncDebounceTimer = null;
   }, 2000);
+}
+
+// Flush pending debounce push immediately on view switch or unload
+async function flushPendingSyncPush() {
+  if (syncDebounceTimer) {
+    clearTimeout(syncDebounceTimer);
+    syncDebounceTimer = null;
+    const syncKey = localStorage.getItem('mrstudy_sync_key');
+    if (syncKey) {
+      await pushStateToCloudWorker(syncKey);
+    }
+  }
 }
 
 // Compile state payload and send to Worker KV
 async function pushStateToCloudWorker(syncKey) {
-  if (!currentUser) {
-    throw new Error('Current user context is missing. Please reload the app.');
-  }
-
-  const userIdRaw = currentUser.id;
-  if (userIdRaw === undefined || userIdRaw === null || userIdRaw === '') {
-    throw new Error('User record contains an invalid or missing ID.');
-  }
-
-  const numericUserId = Number(userIdRaw);
-  if (Number.isNaN(numericUserId)) {
-    throw new Error(`Invalid numeric user ID: ${userIdRaw}`);
-  }
+  if (!currentUser || !currentUser.id) return false;
 
   const db = await openDB();
+  const numericUserId = Number(currentUser.id);
 
   const [rules, ruleLabels, storeItems, userInventory, challenges, exportableRules] = await Promise.all([
     getAllRecords(db, 'rules', numericUserId),
@@ -41,15 +41,23 @@ async function pushStateToCloudWorker(syncKey) {
     getAllRecords(db, 'store_items', numericUserId),
     getAllRecords(db, 'user_inventory', numericUserId),
     getAllRecords(db, 'challenges', numericUserId),
-    (typeof getExportableRulesForTaskitator === 'function')
-      ? getExportableRulesForTaskitator(numericUserId)
+    (typeof getExportableRulesForTaskitator === 'function') 
+      ? getExportableRulesForTaskitator(numericUserId) 
       : []
   ]);
 
+  // Generate a strictly new timestamp for the mutation so the worker accepts it
+  const newMutationTimestamp = new Date().toISOString();
+  
+  // Send the last confirmed sync time separately so the worker can perform valid conflict detection
+  const baseTimestamp = localStorage.getItem('mrstudy_last_synced_at') || newMutationTimestamp;
+
   const payload = {
     app: 'MrStudy',
-    version: '1.0',
-    updated_at: new Date().toISOString(),
+    app_id: 'mrstudy',
+    version: 1,
+    updated_at: baseTimestamp, // Base version for conflict detection
+    mutated_at: newMutationTimestamp, // Actual mutation time
     user: {
       username: currentUser.username,
       role: currentUser.role,
@@ -64,42 +72,49 @@ async function pushStateToCloudWorker(syncKey) {
     },
     rules,
     study_rules: exportableRules,
+    exportable_rules: exportableRules,
     rule_labels: ruleLabels,
     store_items: storeItems,
     user_inventory: userInventory,
     challenges
   };
 
-  let resp;
   try {
-    resp = await fetch(`${SYNC_WORKER_URL}/sync/push`, {
+    const resp = await fetch(`${SYNC_WORKER_URL}/sync/push`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${syncKey}`,
         'X-Taskitator-User': currentUser.username,
+        'X-User-Name': currentUser.username,
         'X-App-ID': 'mrstudy'
       },
       body: JSON.stringify(payload)
     });
-  } catch (netErr) {
-    throw new Error(`Network/CORS fetch error: ${netErr.message}`);
-  }
 
-  if (!resp.ok) {
-    const errText = await resp.text();
-    throw new Error(`Worker status ${resp.status}: ${errText || resp.statusText}`);
+    if (resp.ok) {
+      const data = await resp.json().catch(() => null);
+      const newTimestamp = (data && data.updated_at) ? data.updated_at : newMutationTimestamp;
+      localStorage.setItem('mrstudy_last_synced_at', newTimestamp);
+      return true;
+    } else if (resp.status === 409) {
+      console.warn('Conflict detected: Remote cloud data is newer. Pulling latest cloud state first.');
+      await pullStateFromCloudWorker();
+      return false;
+    } else {
+      console.warn(`Worker rejected sync push with status ${resp.status}`);
+      return false;
+    }
+  } catch (err) {
+    console.warn('Sync push skipped (offline or network error):', err);
+    return false;
   }
-
-  return true;
 }
 
 // Pull snapshot on demand
 async function pullStateFromCloudWorker() {
   const syncKey = localStorage.getItem('mrstudy_sync_key');
-  if (!syncKey || !currentUser || currentUser.id === undefined || currentUser.id === null) {
-    return false;
-  }
+  if (!syncKey || !currentUser || !currentUser.id) return false;
 
   try {
     const resp = await fetch(`${SYNC_WORKER_URL}/sync/pull`, {
@@ -107,134 +122,151 @@ async function pullStateFromCloudWorker() {
       headers: {
         'Authorization': `Bearer ${syncKey}`,
         'X-Taskitator-User': currentUser.username,
+        'X-User-Name': currentUser.username,
         'X-App-ID': 'mrstudy'
       }
     });
 
     if (resp.ok) {
       const data = await resp.json();
-      if (data && data.user) {
+      if (data && !data.empty) {
+        
+        // Stale KV Replica Guard
+        const localLastSync = localStorage.getItem('mrstudy_last_synced_at');
+        if (localLastSync && data.updated_at) {
+          const remoteEpoch = new Date(data.updated_at).getTime();
+          const localEpoch = new Date(localLastSync).getTime();
+          if (!isNaN(remoteEpoch) && !isNaN(localEpoch) && remoteEpoch < localEpoch) {
+            console.warn('Stale KV edge replica detected. Skipping DB wipe to protect local data.');
+            return false;
+          }
+        }
+
         await restoreCloudStateToLocalDB(currentUser.id, data);
+        if (data.updated_at) {
+          localStorage.setItem('mrstudy_last_synced_at', data.updated_at);
+        }
         if (typeof refreshDashboardUI === 'function') await refreshDashboardUI();
         return true;
       }
-    } else {
-      const errText = await resp.text();
-      console.warn(`Sync pull rejected: ${resp.status} - ${errText}`);
     }
     return false;
   } catch (err) {
-    console.warn('Sync pull skipped (offline or network error):', err);
+    console.warn('Sync pull failed:', err);
     return false;
   }
 }
 
-// Immediate bidirectional sync (pull ledger updates, push current local state)
+// Guaranteed-order bidirectional sync
 async function forceCloudSyncBidirectional() {
-  try {
-    const syncKey = localStorage.getItem('mrstudy_sync_key');
-    if (!syncKey) {
-      throw new Error('Sync bearer token missing. Please log in again.');
-    }
-
-    let ingestedTasks = 0;
-
-    // 1. Pull ledger completions from Taskitator bridge
-    if (typeof pullTaskitatorAuditLedger === 'function') {
-      const bridgeResult = await pullTaskitatorAuditLedger();
-      if (bridgeResult && typeof bridgeResult.ingestedCount === 'number') {
-        ingestedTasks = bridgeResult.ingestedCount;
-      }
-    }
-
-    // 2. Pull remote user state
-    const pulled = await pullStateFromCloudWorker();
-
-    // 3. Push active local state
-    const pushed = await pushStateToCloudWorker(syncKey);
-
-    if (typeof refreshDashboardUI === 'function') await refreshDashboardUI();
-    if (typeof renderActionsGrid === 'function') renderActionsGrid();
-
-    alert('Sync successful!');
-    return { ingestedTasks, pulled, pushed };
-  } catch (err) {
-    // Shows popup directly on mobile screen
-    alert(`SYNC FAILED:\n\n${err.message}`);
-    throw err;
+  const syncKey = localStorage.getItem('mrstudy_sync_key');
+  if (!syncKey) {
+    throw new Error('Sync bearer token missing. Please log in again.');
   }
+
+  if (syncDebounceTimer) {
+    clearTimeout(syncDebounceTimer);
+    syncDebounceTimer = null;
+  }
+
+  // 1. Pull remote state FIRST (establishes baseline)
+  const pulled = await pullStateFromCloudWorker();
+
+  // 2. Ingest ledger events ON TOP of the fresh baseline
+  let ingestedTasks = 0;
+  if (typeof pullTaskitatorAuditLedger === 'function') {
+    const bridgeResult = await pullTaskitatorAuditLedger();
+    if (bridgeResult && typeof bridgeResult.ingestedCount === 'number') {
+      ingestedTasks = bridgeResult.ingestedCount;
+    }
+  }
+
+  // 3. Push consolidated state back to the Cloudflare Worker
+  const pushed = await pushStateToCloudWorker(syncKey);
+  if (!pushed) {
+    throw new Error('Failed to push state snapshot to Cloudflare KV.');
+  }
+
+  if (typeof refreshDashboardUI === 'function') await refreshDashboardUI();
+  if (typeof renderActionsGrid === 'function') renderActionsGrid();
+
+  return { ingestedTasks, pulled, pushed };
 }
 
 function getAllRecords(db, storeName, userId) {
   const numericUserId = Number(userId);
   return new Promise((resolve) => {
-    try {
-      if (!db.objectStoreNames.contains(storeName)) {
-        console.warn(`IndexedDB store "${storeName}" does not exist.`);
-        return resolve([]);
-      }
-      const tx = db.transaction(storeName, 'readonly');
-      const store = tx.objectStore(storeName);
-      const index = store.index('user_id');
-      const req = index.getAll(numericUserId);
-      req.onsuccess = () => resolve(req.result || []);
-      req.onerror = (err) => {
-        console.warn(`Error reading ${storeName}:`, err);
-        resolve([]);
-      };
-    } catch (e) {
-      console.warn(`Failed reading store ${storeName}:`, e);
-      resolve([]);
-    }
+    const tx = db.transaction(storeName, 'readonly');
+    const store = tx.objectStore(storeName);
+    const index = store.index('user_id');
+    const req = index.getAll(numericUserId);
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => resolve([]);
   });
 }
 
-async function restoreCloudStateToLocalDB(userId, cloudData) {
+// Fully transactional IndexedDB restoration
+function restoreCloudStateToLocalDB(userId, cloudData) {
   const numericUserId = Number(userId);
-  const db = await openDB();
 
-  const storeNames = ['users', 'rules', 'rule_labels', 'store_items', 'user_inventory', 'challenges']
-    .filter((store) => db.objectStoreNames.contains(store));
+  return new Promise(async (resolve, reject) => {
+    const db = await openDB();
+    const stores = ['users', 'rules', 'rule_labels', 'store_items', 'user_inventory', 'challenges'];
+    const tx = db.transaction(stores, 'readwrite');
 
-  const tx = db.transaction(storeNames, 'readwrite');
+    tx.onerror = (e) => reject(e.target.error);
+    tx.oncomplete = () => resolve();
 
-  // 1. Restore user data
-  if (cloudData.user && currentUser && storeNames.includes('users')) {
-    Object.assign(currentUser, cloudData.user);
-    currentUser.id = numericUserId;
-    tx.objectStore('users').put(currentUser);
-  }
-
-  // 2. Restore collection entities
-  const collections = [
-    { key: 'rules', store: 'rules' },
-    { key: 'rule_labels', store: 'rule_labels' },
-    { key: 'store_items', store: 'store_items' },
-    { key: 'user_inventory', store: 'user_inventory' },
-    { key: 'challenges', store: 'challenges' }
-  ];
-
-  for (const { key, store } of collections) {
-    if (storeNames.includes(store) && Array.isArray(cloudData[key])) {
-      const targetStore = tx.objectStore(store);
-      for (const item of cloudData[key]) {
-        targetStore.put({ ...item, user_id: numericUserId });
-      }
+    if (cloudData.user && currentUser) {
+      Object.assign(currentUser, cloudData.user);
+      currentUser.id = numericUserId;
+      tx.objectStore('users').put(currentUser);
     }
-  }
 
-  return new Promise((resolve, reject) => {
-    tx.oncomplete = () => {
-      if (typeof refreshDashboardUI === 'function') refreshDashboardUI();
-      if (typeof renderActionsGrid === 'function') renderActionsGrid();
-      resolve(true);
+    const syncCollection = (storeName, remoteItems) => {
+      return new Promise((res) => {
+        if (!Array.isArray(remoteItems)) return res();
+        const store = tx.objectStore(storeName);
+        const req = store.index('user_id').getAll(numericUserId);
+
+        req.onsuccess = () => {
+          const localRecords = req.result || [];
+          localRecords.forEach(rec => {
+            if (rec.id !== undefined) store.delete(rec.id);
+          });
+          remoteItems.forEach(item => {
+            store.put({ ...item, user_id: numericUserId });
+          });
+          res();
+        };
+        req.onerror = () => res(); 
+      });
     };
-    tx.onerror = (evt) => reject(evt.target.error);
+
+    await Promise.all([
+      syncCollection('rules', cloudData.rules),
+      syncCollection('rule_labels', cloudData.rule_labels),
+      syncCollection('store_items', cloudData.store_items),
+      syncCollection('user_inventory', cloudData.user_inventory),
+      syncCollection('challenges', cloudData.challenges)
+    ]);
   });
 }
+
+// Browser lifecycle hooks for persistence on close/tab switch
+window.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') {
+    flushPendingSyncPush();
+  }
+});
+
+window.addEventListener('beforeunload', () => {
+  flushPendingSyncPush();
+});
 
 // Global window exposure
 window.triggerCloudSyncPush = triggerCloudSyncPush;
+window.flushPendingSyncPush = flushPendingSyncPush;
 window.pushStateToCloudWorker = pushStateToCloudWorker;
 window.pullStateFromCloudWorker = pullStateFromCloudWorker;
 window.forceCloudSyncBidirectional = forceCloudSyncBidirectional;
