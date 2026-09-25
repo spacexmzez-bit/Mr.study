@@ -6,7 +6,7 @@ let syncDebounceTimer = null;
 function triggerCloudSyncPush() {
   if (!currentUser || !currentUser.is_taskitator_linked) return;
 
-  const syncKey = sessionStorage.getItem('mrstudy_sync_key');
+  const syncKey = localStorage.getItem('mrstudy_sync_key');
   if (!syncKey) return;
 
   clearTimeout(syncDebounceTimer);
@@ -17,14 +17,20 @@ function triggerCloudSyncPush() {
 
 // Compile state payload and send to Worker KV
 async function pushStateToCloudWorker(syncKey) {
-  const db = await openDB();
+  if (!currentUser || !currentUser.id) return;
 
-  const [rules, ruleLabels, storeItems, userInventory, challenges] = await Promise.all([
-    getAllRecords(db, 'rules', currentUser.id),
-    getAllRecords(db, 'rule_labels', currentUser.id),
-    getAllRecords(db, 'store_items', currentUser.id),
-    getAllRecords(db, 'user_inventory', currentUser.id),
-    getAllRecords(db, 'challenges', currentUser.id)
+  const db = await openDB();
+  const numericUserId = Number(currentUser.id);
+
+  const [rules, ruleLabels, storeItems, userInventory, challenges, exportableRules] = await Promise.all([
+    getAllRecords(db, 'rules', numericUserId),
+    getAllRecords(db, 'rule_labels', numericUserId),
+    getAllRecords(db, 'store_items', numericUserId),
+    getAllRecords(db, 'user_inventory', numericUserId),
+    getAllRecords(db, 'challenges', numericUserId),
+    (typeof getExportableRulesForTaskitator === 'function') 
+      ? getExportableRulesForTaskitator(numericUserId) 
+      : []
   ]);
 
   const payload = {
@@ -34,16 +40,17 @@ async function pushStateToCloudWorker(syncKey) {
     user: {
       username: currentUser.username,
       role: currentUser.role,
-      streak_count: currentUser.streak_count,
+      streak_count: currentUser.streak_count || 0,
       last_activity_date: currentUser.last_activity_date,
-      streak_done: currentUser.streak_done,
-      streak_freeze_active: currentUser.streak_freeze_active,
-      banch_balance: currentUser.banch_balance,
-      total_xp: currentUser.total_xp,
-      withdrawal_penalty_pct: currentUser.withdrawal_penalty_pct,
-      lang_pref: currentUser.lang_pref
+      streak_done: currentUser.streak_done || false,
+      streak_freeze_active: currentUser.streak_freeze_active || false,
+      banch_balance: currentUser.banch_balance || 0,
+      total_xp: currentUser.total_xp || 0,
+      withdrawal_penalty_pct: currentUser.withdrawal_penalty_pct ?? 10,
+      lang_pref: currentUser.lang_pref || 'en'
     },
     rules,
+    exportable_rules: exportableRules, // Formatted specifically for Taskitator ingestion
     rule_labels: ruleLabels,
     store_items: storeItems,
     user_inventory: userInventory,
@@ -55,29 +62,36 @@ async function pushStateToCloudWorker(syncKey) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${syncKey}`
+        'Authorization': `Bearer ${syncKey}`,
+        'X-User-Name': currentUser.username
       },
       body: JSON.stringify(payload)
     });
 
     if (resp.ok) {
       console.log('Synced successfully to Cloudflare Worker KV.');
+      return true;
+    } else {
+      console.warn(`Worker rejected sync push with status ${resp.status}`);
+      return false;
     }
   } catch (err) {
     console.warn('Sync push skipped (offline or network error):', err);
+    return false;
   }
 }
 
 // Pull snapshot on demand
 async function pullStateFromCloudWorker() {
-  const syncKey = sessionStorage.getItem('mrstudy_sync_key');
-  if (!syncKey || !currentUser) return;
+  const syncKey = localStorage.getItem('mrstudy_sync_key');
+  if (!syncKey || !currentUser || !currentUser.id) return false;
 
   try {
     const resp = await fetch(`${SYNC_WORKER_URL}/sync`, {
       method: 'GET',
       headers: {
-        'Authorization': `Bearer ${syncKey}`
+        'Authorization': `Bearer ${syncKey}`,
+        'X-User-Name': currentUser.username
       }
     });
 
@@ -85,32 +99,63 @@ async function pullStateFromCloudWorker() {
       const data = await resp.json();
       if (data && data.user) {
         await restoreCloudStateToLocalDB(currentUser.id, data);
-        showToast("Synced with Cloudflare Worker.", "success");
-        await refreshDashboardUI();
+        if (typeof refreshDashboardUI === 'function') await refreshDashboardUI();
+        return true;
       }
     }
+    return false;
   } catch (err) {
     console.warn('Sync pull failed:', err);
+    return false;
   }
 }
 
+// Immediate bidirectional sync (pull ledger updates, push current local state)
+async function forceCloudSyncBidirectional() {
+  const syncKey = localStorage.getItem('mrstudy_sync_key');
+  if (!syncKey) {
+    throw new Error('Sync bearer token missing. Please log in again.');
+  }
+
+  // 1. Pull ledger completions from Taskitator bridge if loaded
+  if (typeof pullTaskitatorAuditLedger === 'function') {
+    await pullTaskitatorAuditLedger();
+  }
+
+  // 2. Pull remote user state
+  await pullStateFromCloudWorker();
+
+  // 3. Push active local state
+  const pushSuccess = await pushStateToCloudWorker(syncKey);
+  if (!pushSuccess) {
+    throw new Error('Failed to push state snapshot to Cloudflare KV.');
+  }
+
+  if (typeof refreshDashboardUI === 'function') await refreshDashboardUI();
+  if (typeof renderActionsGrid === 'function') renderActionsGrid();
+  return true;
+}
+
 function getAllRecords(db, storeName, userId) {
+  const numericUserId = Number(userId);
   return new Promise((resolve) => {
     const tx = db.transaction(storeName, 'readonly');
     const store = tx.objectStore(storeName);
     const index = store.index('user_id');
-    const req = index.getAll(userId);
+    const req = index.getAll(numericUserId);
     req.onsuccess = () => resolve(req.result || []);
     req.onerror = () => resolve([]);
   });
 }
 
 async function restoreCloudStateToLocalDB(userId, cloudData) {
+  const numericUserId = Number(userId);
   const db = await openDB();
   const tx = db.transaction(['users', 'rules', 'rule_labels', 'store_items', 'user_inventory', 'challenges'], 'readwrite');
 
   if (cloudData.user && currentUser) {
     Object.assign(currentUser, cloudData.user);
+    currentUser.id = numericUserId;
     tx.objectStore('users').put(currentUser);
   }
 
@@ -119,3 +164,9 @@ async function restoreCloudStateToLocalDB(userId, cloudData) {
     if (typeof renderActionsGrid === 'function') renderActionsGrid();
   };
 }
+
+// Global window exposure
+window.triggerCloudSyncPush = triggerCloudSyncPush;
+window.pushStateToCloudWorker = pushStateToCloudWorker;
+window.pullStateFromCloudWorker = pullStateFromCloudWorker;
+window.forceCloudSyncBidirectional = forceCloudSyncBidirectional;
