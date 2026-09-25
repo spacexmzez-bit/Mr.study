@@ -50,7 +50,7 @@ async function pushStateToCloudWorker(syncKey) {
       lang_pref: currentUser.lang_pref || 'en'
     },
     rules,
-    exportable_rules: exportableRules,
+    study_rules: exportableRules, // Worker specifically looks for "study_rules" in route C
     rule_labels: ruleLabels,
     store_items: storeItems,
     user_inventory: userInventory,
@@ -58,12 +58,13 @@ async function pushStateToCloudWorker(syncKey) {
   };
 
   try {
-    const resp = await fetch(`${SYNC_WORKER_URL}/sync`, {
+    const resp = await fetch(`${SYNC_WORKER_URL}/sync/push`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${syncKey}`,
-        'X-User-Name': currentUser.username
+        'X-Taskitator-User': currentUser.username,
+        'X-App-ID': 'mrstudy'
       },
       body: JSON.stringify(payload)
     });
@@ -72,12 +73,13 @@ async function pushStateToCloudWorker(syncKey) {
       console.log('Synced successfully to Cloudflare Worker KV.');
       return true;
     } else {
-      console.warn(`Worker rejected sync push with status ${resp.status}`);
-      return false;
+      const errText = await resp.text();
+      console.warn(`Worker rejected sync push: ${resp.status} - ${errText}`);
+      throw new Error(`Cloud sync failed (Status: ${resp.status})`);
     }
   } catch (err) {
-    console.warn('Sync push skipped (offline or network error):', err);
-    return false;
+    console.warn('Sync push skipped:', err);
+    throw err; 
   }
 }
 
@@ -87,11 +89,12 @@ async function pullStateFromCloudWorker() {
   if (!syncKey || !currentUser || !currentUser.id) return false;
 
   try {
-    const resp = await fetch(`${SYNC_WORKER_URL}/sync`, {
+    const resp = await fetch(`${SYNC_WORKER_URL}/sync/pull`, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${syncKey}`,
-        'X-User-Name': currentUser.username
+        'X-Taskitator-User': currentUser.username,
+        'X-App-ID': 'mrstudy'
       }
     });
 
