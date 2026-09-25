@@ -17,7 +17,7 @@ function triggerCloudSyncPush() {
 
 // Compile state payload and send to Worker KV
 async function pushStateToCloudWorker(syncKey) {
-  if (!currentUser || !currentUser.id) return;
+  if (!currentUser || !currentUser.id) return false;
 
   const db = await openDB();
   const numericUserId = Number(currentUser.id);
@@ -50,7 +50,7 @@ async function pushStateToCloudWorker(syncKey) {
       lang_pref: currentUser.lang_pref || 'en'
     },
     rules,
-    exportable_rules: exportableRules, // Formatted specifically for Taskitator ingestion
+    exportable_rules: exportableRules,
     rule_labels: ruleLabels,
     store_items: storeItems,
     user_inventory: userInventory,
@@ -117,23 +117,29 @@ async function forceCloudSyncBidirectional() {
     throw new Error('Sync bearer token missing. Please log in again.');
   }
 
-  // 1. Pull ledger completions from Taskitator bridge if loaded
+  let ingestedTasks = 0;
+
+  // 1. Pull ledger completions from Taskitator bridge
   if (typeof pullTaskitatorAuditLedger === 'function') {
-    await pullTaskitatorAuditLedger();
+    const bridgeResult = await pullTaskitatorAuditLedger();
+    if (bridgeResult && typeof bridgeResult.ingestedCount === 'number') {
+      ingestedTasks = bridgeResult.ingestedCount;
+    }
   }
 
   // 2. Pull remote user state
-  await pullStateFromCloudWorker();
+  const pulled = await pullStateFromCloudWorker();
 
   // 3. Push active local state
-  const pushSuccess = await pushStateToCloudWorker(syncKey);
-  if (!pushSuccess) {
+  const pushed = await pushStateToCloudWorker(syncKey);
+  if (!pushed) {
     throw new Error('Failed to push state snapshot to Cloudflare KV.');
   }
 
   if (typeof refreshDashboardUI === 'function') await refreshDashboardUI();
   if (typeof renderActionsGrid === 'function') renderActionsGrid();
-  return true;
+
+  return { ingestedTasks, pulled, pushed };
 }
 
 function getAllRecords(db, storeName, userId) {
